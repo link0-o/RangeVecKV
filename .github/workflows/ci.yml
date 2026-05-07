@@ -1,0 +1,82 @@
+name: ci
+
+on:
+  push:
+    branches:
+      - master
+      - main
+  pull_request:
+
+jobs:
+  build-test-package:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            ca-certificates git curl zip unzip tar xz-utils build-essential pkg-config \
+            ninja-build protobuf-compiler libprotobuf-dev autoconf automake autoconf-archive \
+            libtool bison flex perl python3 python3-pip python3-venv gfortran nasm yasm
+
+      - name: Install cmake
+        run: |
+          python3 -m venv "$HOME/.local/share/rangeveckv-bootstrap"
+          "$HOME/.local/share/rangeveckv-bootstrap/bin/python" -m pip install --upgrade pip cmake ninja
+          mkdir -p "$HOME/.local/bin"
+          ln -sf "$HOME/.local/share/rangeveckv-bootstrap/bin/cmake" "$HOME/.local/bin/cmake"
+          ln -sf "$HOME/.local/share/rangeveckv-bootstrap/bin/ctest" "$HOME/.local/bin/ctest"
+          ln -sf "$HOME/.local/share/rangeveckv-bootstrap/bin/cpack" "$HOME/.local/bin/cpack"
+          ln -sf "$HOME/.local/share/rangeveckv-bootstrap/bin/ninja" "$HOME/.local/bin/ninja"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Bootstrap vcpkg
+        run: |
+          git clone https://github.com/microsoft/vcpkg.git "$HOME/.local/src/vcpkg"
+          "$HOME/.local/src/vcpkg/bootstrap-vcpkg.sh" -disableMetrics
+
+      - name: Configure
+        run: |
+          cmake -S . -B build/ci -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DKVAI_ENABLE_PACKAGING=ON \
+            -DCMAKE_TOOLCHAIN_FILE=$HOME/.local/src/vcpkg/scripts/buildsystems/vcpkg.cmake
+
+      - name: Build
+        run: cmake --build build/ci --parallel
+
+      - name: Test
+        run: ctest --test-dir build/ci --output-on-failure
+
+      - name: Package
+        run: |
+          cmake --install build/ci --prefix "$PWD/dist/install"
+          cpack --config build/ci/CPackConfig.cmake
+
+      - name: Docker build
+        run: docker build -t rangeveckv:ci .
+
+      - name: Docker smoke test
+        run: |
+          docker run -d --name rangeveckv-ci -p 18080:8080 rangeveckv:ci
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:18080/healthz >/dev/null; then
+              break
+            fi
+            sleep 2
+          done
+          bash scripts/http_smoke.sh http://127.0.0.1:18080
+          docker logs rangeveckv-ci
+          docker rm -f rangeveckv-ci
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rangeveckv-artifacts
+          path: |
+            build/ci/*.tar.gz
+            dist/install/**

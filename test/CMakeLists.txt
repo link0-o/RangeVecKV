@@ -1,0 +1,19 @@
+add_executable(kvai_kv_store_test kv_store_test.cpp)
+target_link_libraries(kvai_kv_store_test PRIVATE kvai_core kvai_infra)
+add_test(NAME kvai_kv_store_test COMMAND kvai_kv_store_test)
+
+add_executable(kvai_gateway_pipeline_test gateway_pipeline_test.cpp)
+target_link_libraries(kvai_gateway_pipeline_test PRIVATE kvai_gateway kvai_core kvai_ai kvai_search kvai_infra)
+add_test(NAME kvai_gateway_pipeline_test COMMAND kvai_gateway_pipeline_test)
+
+add_executable(kvai_http_gateway_smoke_test http_gateway_smoke_test.cpp)
+target_link_libraries(kvai_http_gateway_smoke_test PRIVATE kvai_gateway kvai_infra)
+add_test(NAME kvai_http_gateway_smoke_test COMMAND kvai_http_gateway_smoke_test)
+
+add_executable(kvai_cluster_routing_test cluster_routing_test.cpp)
+target_link_libraries(kvai_cluster_routing_test PRIVATE kvai_infra)
+add_test(NAME kvai_cluster_routing_test COMMAND kvai_cluster_routing_test)
+
+add_executable(kvai_config_loader_test config_loader_test.cpp)
+target_link_libraries(kvai_config_loader_test PRIVATE kvai_infra)
+add_test(NAME kvai_config_loader_test COMMAND kvai_config_loader_test)

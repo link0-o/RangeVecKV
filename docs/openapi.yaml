@@ -1,0 +1,145 @@
+openapi: 3.0.3
+info:
+  title: RangeVecKV Gateway API
+  version: 0.1.0
+  description: HTTP gateway for semantic search, health probes and metrics.
+servers:
+  - url: http://127.0.0.1:8080
+paths:
+  /healthz:
+    get:
+      summary: Liveness and readiness health check
+      responses:
+        '200':
+          description: Service is ready
+  /metrics:
+    get:
+      summary: Prometheus metrics endpoint
+      responses:
+        '200':
+          description: Metrics payload
+        '401':
+          description: Missing or invalid API key
+  /openapi.yaml:
+    get:
+      summary: OpenAPI document
+      responses:
+        '200':
+          description: YAML OpenAPI spec
+  /v1/router:
+    get:
+      summary: Resolve document ownership via consistent hash routing
+      parameters:
+        - in: query
+          name: collection
+          schema:
+            type: string
+        - in: query
+          name: key
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Route resolution result
+        '401':
+          description: Missing or invalid API key
+  /v1/documents:
+    post:
+      summary: Upsert a document into KV and vector index
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                collection:
+                  type: string
+                key:
+                  type: string
+                title:
+                  type: string
+                body:
+                  type: string
+                metadata:
+                  type: object
+                  additionalProperties:
+                    type: string
+      responses:
+        '200':
+          description: Document accepted
+        '401':
+          description: Missing or invalid API key
+        '503':
+          description: Routed to a remote node or service unavailable
+    delete:
+      summary: Delete a document from KV and vector index
+      parameters:
+        - in: query
+          name: collection
+          schema:
+            type: string
+        - in: query
+          name: key
+          schema:
+            type: string
+            required: true
+      responses:
+        '200':
+          description: Document deleted
+        '401':
+          description: Missing or invalid API key
+        '503':
+          description: Routed to a remote node or service unavailable
+  /v1/search:
+    get:
+      summary: Semantic search with query parameters
+      parameters:
+        - in: query
+          name: q
+          schema:
+            type: string
+          required: true
+        - in: query
+          name: collection
+          schema:
+            type: string
+        - in: query
+          name: top_k
+          schema:
+            type: integer
+        - in: query
+          name: filter.domain
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Search result
+        '401':
+          description: Missing or invalid API key
+        '503':
+          description: Search temporarily unavailable
+    post:
+      summary: Semantic search with JSON body
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                query:
+                  type: string
+                collection:
+                  type: string
+                top_k:
+                  type: integer
+                filters:
+                  type: object
+                  additionalProperties:
+                    type: string
+      responses:
+        '200':
+          description: Search result
+        '401':
+          description: Missing or invalid API key

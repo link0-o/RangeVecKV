@@ -1,0 +1,12 @@
+build/
+dist/
+_CPack_Packages/
+vcpkg_installed/
+
+data/
+
+*.tar.gz
+
+.env
+
+.DS_Store

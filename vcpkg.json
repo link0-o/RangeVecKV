@@ -1,0 +1,44 @@
+{
+  "name": "rangeveckv",
+  "version-string": "0.1.0",
+  "description": "Distributed KV plus semantic retrieval engine build manifest",
+  "builtin-baseline": "b781af668027bbf77f2f827f47b5c6cd8d825c08",
+  "dependencies": [
+    {
+      "name": "brpc",
+      "version>=": "1.16.0"
+    },
+    {
+      "name": "onnxruntime",
+      "version>=": "1.23.2"
+    },
+    {
+      "name": "faiss",
+      "version>=": "1.14.1"
+    },
+    {
+      "name": "rocksdb",
+      "version>=": "11.0.4"
+    },
+    {
+      "name": "etcd-cpp-apiv3",
+      "version>=": "0.15.4"
+    },
+    {
+      "name": "spdlog",
+      "version>=": "1.17.0"
+    },
+    {
+      "name": "yaml-cpp",
+      "version>=": "0.9.0#1"
+    },
+    {
+      "name": "nlohmann-json",
+      "version>=": "3.12.0#2"
+    },
+    {
+      "name": "gtest",
+      "version>=": "1.17.0#2"
+    }
+  ]
+}

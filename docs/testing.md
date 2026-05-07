@@ -1,0 +1,173 @@
+# RangeVecKV 编译与测试说明
+
+本文档对应当前仓库的默认本地运行方式。
+
+当前默认本地验证路径使用 fallback 后端，不要求先接通 ONNX Runtime、FAISS、RocksDB 的完整真实后端。
+
+默认后端如下：
+
+- `ai.backend=deterministic`
+- `search.backend=brute_force`
+- `storage.backend=wal`
+- `cluster.discovery_backend=static`
+
+## 1. 前置条件
+
+建议先准备以下工具：
+
+- `cmake >= 3.24`
+- `ninja`
+- `g++`
+- `ctest`
+
+如果本机环境还没准备好，先执行：
+
+```bash
+./scripts/bootstrap_dev_env.sh
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+## 2. 默认本地构建与测试
+
+默认本地构建已经改成 fallback-only 模式，不会自动触发完整 vcpkg manifest 安装。
+
+直接执行：
+
+```bash
+./scripts/build_local.sh
+```
+
+这条命令会完成三件事：
+
+1. CMake configure 到 `build/local`
+2. Ninja 构建
+3. `ctest --output-on-failure`
+
+构建成功后，当前测试集应通过以下 5 个测试：
+
+- `kvai_kv_store_test`
+- `kvai_gateway_pipeline_test`
+- `kvai_http_gateway_smoke_test`
+- `kvai_cluster_routing_test`
+- `kvai_config_loader_test`
+
+如果你只想单独重跑测试：
+
+```bash
+ctest --test-dir build/local --output-on-failure
+```
+
+如果只跑单个测试：
+
+```bash
+ctest --test-dir build/local -R kvai_kv_store_test --output-on-failure
+ctest --test-dir build/local -R kvai_gateway_pipeline_test --output-on-failure
+```
+
+## 3. 启动本地服务
+
+构建完成后启动服务：
+
+```bash
+./scripts/run_local_service.sh
+```
+
+等价命令：
+
+```bash
+./build/local/src/gateway/kvai_server --config ./config/server.yaml --serve
+```
+
+正常启动后会监听：
+
+```text
+http://127.0.0.1:8080
+```
+
+## 4. HTTP 冒烟测试
+
+另开一个终端执行：
+
+```bash
+./scripts/http_smoke.sh http://127.0.0.1:8080
+```
+
+脚本会检查这些接口：
+
+- `/healthz`
+- `/v1/router`
+- `/v1/search`
+- `/metrics`
+
+如果只看健康检查：
+
+```bash
+./scripts/healthcheck.sh http://127.0.0.1:8080
+```
+
+## 5. 打包验证
+
+如果要验证安装树和 TGZ 打包：
+
+```bash
+./scripts/package_local.sh
+```
+
+注意这一步比默认本地构建更重，因为它更接近完整打包流程。
+
+## 6. Docker 验证
+
+如果要走容器路径：
+
+```bash
+docker build -t rangeveckv:local .
+docker run --rm -p 8080:8080 rangeveckv:local
+```
+
+然后执行：
+
+```bash
+./scripts/http_smoke.sh http://127.0.0.1:8080
+```
+
+## 7. 真实后端构建说明
+
+如果你确实要尝试把真实后端一起编进来，再显式开启：
+
+```bash
+export KVAI_USE_VCPKG_TOOLCHAIN=1
+./scripts/build_local.sh
+```
+
+这条路径会尝试接入完整 vcpkg toolchain，并可能触发 ONNX Runtime、FAISS、RocksDB 等大依赖构建。
+
+这不是默认本地验证路径，也不建议作为第一次编译测试方式。
+
+## 8. 常见问题
+
+### 8.1 `run_local_service.sh` 报找不到 `kvai_server`
+
+说明构建还没成功完成。
+
+先重新执行：
+
+```bash
+./scripts/build_local.sh
+```
+
+### 8.2 Git 左侧出现大量 10k+ 文件
+
+通常是中间产物进入了 Git 视图，主要包括：
+
+- `build/`
+- `dist/`
+- `_CPack_Packages/`
+- `vcpkg_installed/`
+- `data/`
+- `*.tar.gz`
+
+仓库现在已经补了 `.gitignore`，重新刷新 Git 视图即可。
+
+### 8.3 默认本地构建为什么不直接编真实后端
+
+因为当前仓库的本地可运行基线是 fallback 路径，真实后端适配入口已经存在，但不应阻塞默认本地编译、测试和启动。

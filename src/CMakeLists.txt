@@ -1,0 +1,5 @@
+add_subdirectory(infra)
+add_subdirectory(core)
+add_subdirectory(ai)
+add_subdirectory(search)
+add_subdirectory(gateway)

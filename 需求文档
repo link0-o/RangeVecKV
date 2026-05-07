@@ -1,0 +1,279 @@
+# RangeVecKV 最终需求与交付说明
+
+## 1. 文档目的
+
+本文件不再把“目标技术栈”直接等同于“当前全部已完成实现”。
+
+它分三层描述项目：
+
+1. 最终产品目标
+2. 当前仓库已完成交付
+3. 仍需继续接通的真实运行时后端
+
+这样可以保证工程实现、部署方式、测试结果与文档口径一致。
+
+## 2. 最终产品目标
+
+RangeVecKV 的最终目标是一个面向生产环境的分布式 KV + AI 语义检索引擎，要求同时覆盖：
+
+- 高吞吐、低延迟的 KV 存储
+- 文本/图像语义向量化
+- ANN 向量检索
+- 一致性哈希分片与节点路由
+- 全链路可观测、可降级、可部署、可扩展
+
+目标技术主线保持不变：
+
+- C++17
+- vcpkg manifest
+- CMake 3.24+
+- BRPC/gRPC
+- ONNX Runtime
+- FAISS
+- RocksDB
+- etcd
+- Prometheus / OpenAPI / Docker / GitHub Actions
+
+## 3. 当前仓库已完成交付
+
+### 3.1 服务面
+
+当前仓库已经交付如下 HTTP 产品接口：
+
+- `GET /healthz`
+- `GET /metrics`
+- `GET /openapi.yaml`
+- `GET/POST /v1/search`
+- `GET /v1/router`
+- `POST /v1/documents`
+- `DELETE /v1/documents`
+
+### 3.2 控制面
+
+当前仓库已经实现：
+
+- API Key 鉴权
+- 固定窗口限流
+- trace_id 注入
+- 优雅停机
+- 只读模式
+- 静态节点配置
+- 一致性哈希 owner 计算
+- 健康状态与运行细节导出
+
+### 3.3 工程面
+
+当前仓库已经实现：
+
+- 本地构建脚本
+- 本地测试脚本
+- 本地 HTTP 冒烟脚本
+- 安装与 TGZ 打包
+- Docker 镜像构建
+- Compose 栈编排
+- GitHub Actions CI
+- OpenAPI 文档
+- 运维文档
+
+### 3.4 当前默认运行后端
+
+当前默认运行后端是工程化 fallback 实现：
+
+| 领域 | 当前默认后端 | 状态 |
+|---|---|---|
+| AI 推理 | `deterministic` | 已可运行 |
+| 向量检索 | `brute_force` | 已可运行 |
+| KV 存储 | `wal` | 已可运行 |
+| 服务发现 | `static` | 已可运行 |
+
+### 3.5 当前已接入但受依赖条件约束的真实后端
+
+当前代码中已经补入真实后端适配入口：
+
+- `ai.backend=onnxruntime`
+- `search.backend=faiss`
+- `storage.backend=rocksdb`
+
+这些后端是否能在当前机器实际激活，取决于 vcpkg 依赖是否已完整安装。
+
+## 4. 功能需求
+
+### 4.1 KV 存储
+
+必须支持：
+
+- Put
+- Get
+- Delete
+- Range
+- 批量写入
+- 崩溃恢复
+- 只读模式
+
+当前状态：
+
+- WAL + Snapshot fallback 已完成
+- RocksDB 适配入口已补入，等待真实库安装并验证
+
+### 4.2 AI 推理
+
+必须支持：
+
+- 文本/图像输入
+- 向量输出
+- 超时控制
+- 降级路径
+- 后端可切换
+
+当前状态：
+
+- Deterministic Embedding 已完成
+- ONNX Runtime 适配入口已补入，要求模型满足当前适配器约定输入输出形状
+
+### 4.3 向量检索
+
+必须支持：
+
+- Top-K 检索
+- metadata 过滤
+- 动态增删
+- 持久化与恢复
+
+当前状态：
+
+- Brute-force fallback 已完成
+- FAISS 适配入口已补入，支持索引和元数据快照
+
+### 4.4 分布式路由
+
+必须支持：
+
+- 一致性哈希分片
+- 节点 owner 决策
+- 路由状态查询
+- 后续 etcd 服务发现扩展
+
+当前状态：
+
+- static 节点配置 + 一致性哈希已完成
+- etcd 运行时发现尚未真正接线
+
+## 5. 非功能需求
+
+### 5.1 可用性
+
+- 支持 SIGINT/SIGTERM 优雅停机
+- 支持存储与索引刷盘
+- 支持服务健康检查
+
+### 5.2 可观测性
+
+- 结构化日志
+- Prometheus 指标
+- trace_id 透传
+- `/healthz`
+- `/metrics`
+
+### 5.3 安全性
+
+- API Key 鉴权
+- 限流
+- TLS 模式配置位保留
+
+说明：
+
+- 当前 TLS 为配置与健康输出占位，未完成真正双向认证链路接线。
+
+### 5.4 可交付性
+
+- CMake
+- vcpkg manifest
+- Dockerfile
+- docker-compose
+- GitHub Actions
+- CPack TGZ
+
+## 6. 目录约束
+
+```text
+kvai-engine/
+├── proto/
+├── src/
+│   ├── core/
+│   ├── ai/
+│   ├── search/
+│   ├── gateway/
+│   └── infra/
+├── test/
+├── config/
+├── docs/
+├── scripts/
+├── vcpkg.json
+└── CMakeLists.txt
+```
+
+## 7. 当前推荐运行方式
+
+### 本地构建
+
+```bash
+./scripts/build_local.sh
+```
+
+### 启动服务
+
+```bash
+./scripts/run_local_service.sh
+```
+
+### HTTP 冒烟
+
+```bash
+./scripts/http_smoke.sh http://127.0.0.1:8080
+```
+
+### 生产样例配置
+
+- `config/server.prod.yaml`
+- `config/model.prod.yaml`
+
+支持通过 `${ENV_VAR}` 读取：
+
+- `KVAI_API_KEY`
+- `KVAI_CLUSTER_NODES`
+- `KVAI_TLS_MODE`
+- `KVAI_MODEL_PATH`
+
+### 容器栈
+
+```bash
+cp .env.example .env
+./scripts/stack_local.sh up
+```
+
+## 8. 生产红线
+
+1. 不在 KV 中存大文件。
+2. AI 推理必须保留超时和降级。
+3. 向量索引必须支持恢复。
+4. 所有依赖必须通过 vcpkg manifest 锁定。
+5. 汇编只能用于热点路径优化，禁止替换 STL 和通用内存分配逻辑。
+
+## 9. 当前剩余真实接线项
+
+下列项属于“当前代码已有接口/配置/部署位，但仍需继续完成真实运行时验证”的部分：
+
+1. ONNX Runtime 模型适配与真实模型验证
+2. FAISS 实库路径验证与大规模检索验证
+3. RocksDB 实库路径验证与列族能力扩展
+4. etcd 动态服务发现与配置热更新
+5. BRPC/gRPC 正式网关对外服务
+6. TLS 双向认证与证书管理
+
+## 10. 判断标准
+
+当下这个仓库已经不应再被视为“demo 仓库”，而应被视为：
+
+- 一个已经具备产品化交付链路的工程化服务基线
+- 一个支持 fallback 运行的完整单机产品原型
+- 一个可继续接入真实三方运行时后端的工业化代码骨架

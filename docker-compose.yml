@@ -1,0 +1,65 @@
+version: "3.9"
+
+services:
+  rangeveckv:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: rangeveckv:local
+    container_name: rangeveckv
+    env_file:
+      - .env
+    command: ["/opt/rangeveckv/bin/kvai_server", "--config", "/opt/rangeveckv/share/rangeveckv/config/server.prod.yaml", "--serve"]
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/opt/rangeveckv/data
+      - ./config:/opt/rangeveckv/share/rangeveckv/config
+      - ./docs:/opt/rangeveckv/share/rangeveckv/docs
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    depends_on:
+      - etcd
+      - minio
+    restart: unless-stopped
+
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.18
+    container_name: rangeveckv-etcd
+    environment:
+      ETCD_NAME: node1
+      ETCD_DATA_DIR: /etcd-data
+      ETCD_LISTEN_CLIENT_URLS: http://0.0.0.0:2379
+      ETCD_ADVERTISE_CLIENT_URLS: http://etcd:2379
+      ETCD_LISTEN_PEER_URLS: http://0.0.0.0:2380
+      ETCD_INITIAL_ADVERTISE_PEER_URLS: http://etcd:2380
+      ETCD_INITIAL_CLUSTER: node1=http://etcd:2380
+      ETCD_INITIAL_CLUSTER_STATE: new
+      ETCD_INITIAL_CLUSTER_TOKEN: rangeveckv-cluster
+    ports:
+      - "2379:2379"
+    volumes:
+      - etcd-data:/etcd-data
+    restart: unless-stopped
+
+  minio:
+    image: quay.io/minio/minio:RELEASE.2026-03-14T18-26-42Z
+    container_name: rangeveckv-minio
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    restart: unless-stopped
+
+volumes:
+  etcd-data:
+  minio-data:

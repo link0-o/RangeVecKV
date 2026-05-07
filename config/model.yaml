@@ -1,0 +1,5 @@
+model.name: deterministic-fallback
+model.backend: local-hash
+model.embedding_dimensions: 32
+model.batch_size: 16
+model.device: cpu
