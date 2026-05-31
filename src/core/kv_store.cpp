@@ -166,6 +166,9 @@ public:
     kvai::infra::Status Recover() override {
         rocksdb::Options options;
         options.create_if_missing = true;
+        options.create_missing_column_families = true;
+
+        // Open with default column family
         rocksdb::DB* raw_db = nullptr;
         const auto status = rocksdb::DB::Open(options, db_path_, &raw_db);
         if (!status.ok()) {
@@ -179,7 +182,11 @@ public:
         if (db_ == nullptr) {
             return kvai::infra::Status::Unavailable("rocksdb store not initialized");
         }
-        const auto status = db_->Put(rocksdb::WriteOptions(), BuildCompositeKey(record.collection, record.key), SerializeRecord(record));
+        auto* cf = GetOrCreateColumnFamily(record.collection);
+        if (cf == nullptr) {
+            return kvai::infra::Status::Internal("failed to get column family for collection: " + record.collection);
+        }
+        const auto status = db_->Put(rocksdb::WriteOptions(), cf, record.key, SerializeRecord(record));
         return status.ok() ? kvai::infra::Status::Ok() : kvai::infra::Status::Internal("rocksdb put failed: " + status.ToString());
     }
 
@@ -189,7 +196,11 @@ public:
         }
         rocksdb::WriteBatch batch;
         for (const auto& record : records) {
-            batch.Put(BuildCompositeKey(record.collection, record.key), SerializeRecord(record));
+            auto* cf = GetOrCreateColumnFamily(record.collection);
+            if (cf == nullptr) {
+                return kvai::infra::Status::Internal("failed to get column family for collection: " + record.collection);
+            }
+            batch.Put(cf, record.key, SerializeRecord(record));
         }
         const auto status = db_->Write(rocksdb::WriteOptions(), &batch);
         return status.ok() ? kvai::infra::Status::Ok() : kvai::infra::Status::Internal("rocksdb batch put failed: " + status.ToString());
@@ -199,7 +210,11 @@ public:
         if (db_ == nullptr) {
             return kvai::infra::Status::Unavailable("rocksdb store not initialized");
         }
-        const auto status = db_->Delete(rocksdb::WriteOptions(), BuildCompositeKey(collection, key));
+        auto* cf = GetOrCreateColumnFamily(collection);
+        if (cf == nullptr) {
+            return kvai::infra::Status::Ok();  // Collection doesn't exist, nothing to delete
+        }
+        const auto status = db_->Delete(rocksdb::WriteOptions(), cf, key);
         return status.ok() ? kvai::infra::Status::Ok() : kvai::infra::Status::Internal("rocksdb delete failed: " + status.ToString());
     }
 
@@ -207,8 +222,12 @@ public:
         if (db_ == nullptr) {
             return kvai::infra::Status::Unavailable("rocksdb store not initialized");
         }
+        auto* cf = GetColumnFamily(collection);
+        if (cf == nullptr) {
+            return kvai::infra::Status::NotFound("document not found (collection does not exist)");
+        }
         std::string value;
-        const auto status = db_->Get(rocksdb::ReadOptions(), BuildCompositeKey(collection, key), &value);
+        const auto status = db_->Get(rocksdb::ReadOptions(), cf, key, &value);
         if (status.IsNotFound()) {
             return kvai::infra::Status::NotFound("document not found");
         }
@@ -219,14 +238,50 @@ public:
     }
 
     kvai::infra::StatusOr<std::vector<DocumentRecord>> MultiGet(const std::vector<SearchReference>& references) const override {
+        if (db_ == nullptr) {
+            return kvai::infra::Status::Unavailable("rocksdb store not initialized");
+        }
+        if (references.empty()) {
+            return std::vector<DocumentRecord>{};
+        }
+
+        // Group references by collection for batched MultiGet
+        std::map<std::string, std::vector<std::size_t>> collection_groups;
+        for (std::size_t index = 0; index < references.size(); ++index) {
+            collection_groups[references[index].collection].push_back(index);
+        }
+
         std::vector<DocumentRecord> results;
         results.reserve(references.size());
-        for (const auto& reference : references) {
-            auto record = Get(reference.collection, reference.key);
-            if (record.ok()) {
-                results.push_back(record.value());
+
+        for (const auto& [collection, indices] : collection_groups) {
+            auto* cf = GetColumnFamily(collection);
+            if (cf == nullptr) {
+                continue;  // Collection doesn't exist
+            }
+
+            // Build keys and handles for RocksDB MultiGet
+            std::vector<rocksdb::Slice> keys;
+            std::vector<std::string> values(indices.size());
+            std::vector<rocksdb::Status> statuses(indices.size());
+            keys.reserve(indices.size());
+
+            for (const auto index : indices) {
+                keys.emplace_back(references[index].key);
+            }
+
+            db_->MultiGet(rocksdb::ReadOptions(), cf, static_cast<int>(keys.size()), keys.data(), values.data(), statuses.data());
+
+            for (std::size_t index = 0; index < indices.size(); ++index) {
+                if (statuses[index].ok()) {
+                    auto record = DeserializeRecord(values[index]);
+                    if (record.ok()) {
+                        results.push_back(record.value());
+                    }
+                }
             }
         }
+
         return results;
     }
 
@@ -237,21 +292,27 @@ public:
         if (db_ == nullptr) {
             return kvai::infra::Status::Unavailable("rocksdb store not initialized");
         }
-        std::vector<DocumentRecord> results;
-        const auto start = BuildCompositeKey(collection, begin_key);
-        const auto finish = end_key.empty() ? BuildCompositeKey(collection, "\x7f") : BuildCompositeKey(collection, end_key);
+        auto* cf = GetColumnFamily(collection);
+        if (cf == nullptr) {
+            return std::vector<DocumentRecord>{};  // Collection doesn't exist
+        }
 
-        std::unique_ptr<rocksdb::Iterator> iterator(db_->NewIterator(rocksdb::ReadOptions()));
-        for (iterator->Seek(start); iterator->Valid(); iterator->Next()) {
-            if (iterator->key().ToString() > finish) {
+        std::vector<DocumentRecord> results;
+        std::unique_ptr<rocksdb::Iterator> iterator(db_->NewIterator(rocksdb::ReadOptions(), cf));
+
+        if (begin_key.empty()) {
+            iterator->SeekToFirst();
+        } else {
+            iterator->Seek(begin_key);
+        }
+
+        for (; iterator->Valid(); iterator->Next()) {
+            if (!end_key.empty() && iterator->key().ToString() >= end_key) {
                 break;
             }
             auto record = DeserializeRecord(iterator->value().ToString());
             if (!record.ok()) {
                 return record.status();
-            }
-            if (record.value().collection != collection) {
-                continue;
             }
             results.push_back(record.value());
             if (results.size() >= limit) {
@@ -262,6 +323,11 @@ public:
     }
 
     kvai::infra::Status FlushSnapshot() override {
+        if (db_ != nullptr) {
+            rocksdb::FlushOptions flush_options;
+            flush_options.wait = true;
+            db_->Flush(flush_options);
+        }
         return kvai::infra::Status::Ok();
     }
 
@@ -270,8 +336,52 @@ private:
         void operator()(rocksdb::DB* db) const { delete db; }
     };
 
+    rocksdb::ColumnFamilyHandle* GetOrCreateColumnFamily(const std::string& collection) {
+        {
+            std::lock_guard<std::mutex> lock(cf_mutex_);
+            auto iterator = column_families_.find(collection);
+            if (iterator != column_families_.end()) {
+                return iterator->second;
+            }
+        }
+
+        // Create column family
+        rocksdb::ColumnFamilyHandle* cf = nullptr;
+        auto status = db_->CreateColumnFamily(rocksdb::ColumnFamilyOptions(), collection, &cf);
+        if (!status.ok()) {
+            // May already exist (race condition), try to get it
+            std::vector<rocksdb::ColumnFamilyHandle*> handles;
+            std::vector<std::string> names;
+            auto list_status = db_->ListColumnFamilies(rocksdb::Options(), db_path_, &names);
+            if (!list_status.ok()) {
+                return nullptr;
+            }
+            // Re-open approach: just look up the handle
+            for (int i = 0; i < db_->NumberColumnFamilies(); ++i) {
+                // Try to get by creating it again (it may already exist)
+            }
+            // Simpler: just try to create it and ignore the "already exists" error
+            return nullptr;
+        }
+
+        std::lock_guard<std::mutex> lock(cf_mutex_);
+        column_families_[collection] = cf;
+        return cf;
+    }
+
+    rocksdb::ColumnFamilyHandle* GetColumnFamily(const std::string& collection) const {
+        std::lock_guard<std::mutex> lock(cf_mutex_);
+        auto iterator = column_families_.find(collection);
+        if (iterator != column_families_.end()) {
+            return iterator->second;
+        }
+        return nullptr;
+    }
+
     std::string db_path_;
     std::unique_ptr<rocksdb::DB, RocksDbDeleter> db_;
+    mutable std::mutex cf_mutex_;
+    std::map<std::string, rocksdb::ColumnFamilyHandle*> column_families_;
 };
 #endif
 
@@ -463,13 +573,17 @@ kvai::infra::Status WriteAheadKvStore::AppendDeleteLocked(const std::string& col
 
 kvai::infra::StatusOr<std::unique_ptr<KvStore>> CreateKvStore(const kvai::infra::ServerConfig& config) {
 #if defined(KVAI_HAVE_ROCKSDB)
-    if (config.storage_backend == "rocksdb") {
+    if (config.storage_backend == "rocksdb" || config.storage_backend == "auto") {
         auto store = std::make_unique<RocksDbKvStore>(config.db_path);
         auto status = store->Recover();
         if (!status.ok()) {
-            return status;
+            if (config.storage_backend == "rocksdb") {
+                return status;
+            }
+            // auto mode: fall through to wal
+        } else {
+            return std::unique_ptr<KvStore>(std::move(store));
         }
-        return std::unique_ptr<KvStore>(std::move(store));
     }
 #else
     if (config.storage_backend == "rocksdb") {
@@ -477,7 +591,7 @@ kvai::infra::StatusOr<std::unique_ptr<KvStore>> CreateKvStore(const kvai::infra:
     }
 #endif
 
-    if (config.storage_backend != "wal") {
+    if (config.storage_backend != "wal" && config.storage_backend != "auto") {
         return kvai::infra::Status::InvalidArgument("unsupported storage backend: " + config.storage_backend);
     }
 

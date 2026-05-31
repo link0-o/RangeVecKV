@@ -6,35 +6,23 @@
 #include <string>
 #include <thread>
 
-#include "gateway/http_runtime.h"
+#include <nlohmann/json.hpp>
+
+#include "gateway/json_helpers.h"
 #include "gateway/server.h"
 #include "infra/config.h"
 #include "infra/logging.h"
+
+#if defined(KVAI_HAVE_BRPC)
+#include "gateway/brpc_runtime.h"
+#else
+#include "gateway/http_runtime.h"
+#endif
 
 namespace {
 
 void PrintUsage() {
     std::cout << "Usage: kvai_server --config <path> [--query <text>] [--top-k <n>] [--collection <name>] [--healthcheck] [--dump-openapi] [--serve]\n";
-}
-
-std::string JsonEscape(const std::string& value) {
-    std::string escaped;
-    for (char ch : value) {
-        switch (ch) {
-        case '\\':
-        case '"':
-            escaped.push_back('\\');
-            escaped.push_back(ch);
-            break;
-        case '\n':
-            escaped += "\\n";
-            break;
-        default:
-            escaped.push_back(ch);
-            break;
-        }
-    }
-    return escaped;
 }
 
 std::atomic<bool> g_stop_requested{false};
@@ -82,9 +70,7 @@ int main(int argc, char** argv) {
         return EXIT_FAILURE;
     }
 
-    if (config.value().log_level == "debug") {
-        kvai::infra::Logger::Instance().SetLevel(kvai::infra::LogLevel::kDebug);
-    }
+    kvai::infra::log::ConfigureLogger(config.value());
 
     kvai::gateway::InProcessGatewayServer server(config.value());
     auto start_status = server.Start();
@@ -95,11 +81,7 @@ int main(int argc, char** argv) {
 
     if (healthcheck) {
         const auto report = server.HealthCheck("");
-        std::cout << "{\n"
-                  << "  \"trace_id\": \"" << JsonEscape(report.trace_id) << "\",\n"
-                  << "  \"status\": \"" << JsonEscape(report.status) << "\",\n"
-                  << "  \"version\": \"" << JsonEscape(report.version) << "\"\n"
-                  << "}\n";
+        std::cout << kvai::gateway::json::ToJson(report).dump(2) << std::endl;
         server.Stop();
         return EXIT_SUCCESS;
     }
@@ -123,23 +105,7 @@ int main(int argc, char** argv) {
             return EXIT_FAILURE;
         }
 
-        std::cout << "{\n"
-                  << "  \"trace_id\": \"" << JsonEscape(result.value().trace_id) << "\",\n"
-                  << "  \"degraded\": " << (result.value().degraded ? "true" : "false") << ",\n"
-                  << "  \"message\": \"" << JsonEscape(result.value().message) << "\",\n"
-                  << "  \"hits\": [\n";
-
-        for (std::size_t index = 0; index < result.value().hits.size(); ++index) {
-            const auto& hit = result.value().hits[index];
-            std::cout << "    {\"key\": \"" << JsonEscape(hit.key) << "\", \"title\": \"" << JsonEscape(hit.title)
-                      << "\", \"snippet\": \"" << JsonEscape(hit.snippet) << "\", \"score\": " << hit.score << "}";
-            if (index + 1 < result.value().hits.size()) {
-                std::cout << ',';
-            }
-            std::cout << '\n';
-        }
-
-        std::cout << "  ]\n}\n";
+        std::cout << kvai::gateway::json::ToJson(result.value()).dump(2) << std::endl;
         server.Stop();
         return EXIT_SUCCESS;
     }
@@ -154,7 +120,11 @@ int main(int argc, char** argv) {
         std::signal(SIGINT, HandleSignal);
         std::signal(SIGTERM, HandleSignal);
 
+#if defined(KVAI_HAVE_BRPC)
+        kvai::gateway::BrpcGatewayRuntime runtime(config.value());
+#else
         kvai::gateway::HttpGatewayRuntime runtime(config.value());
+#endif
         auto runtime_status = runtime.Start();
         if (!runtime_status.ok()) {
             std::cerr << runtime_status.ToString() << std::endl;
@@ -162,9 +132,14 @@ int main(int argc, char** argv) {
         }
 
         std::cout << "kvai_server serving on http://" << config.value().host << ':' << config.value().port << "\n";
+
+#if defined(KVAI_HAVE_BRPC)
+        runtime.Wait();
+#else
         while (!g_stop_requested.load()) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
+#endif
         runtime.Stop();
     }
 

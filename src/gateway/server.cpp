@@ -66,6 +66,24 @@ kvai::infra::Status InProcessGatewayServer::Start() {
     }
     router_.Rebuild(nodes.value());
 
+    // Start etcd discovery if configured
+    if (config_.discovery_backend == "etcd") {
+        kvai::infra::ClusterNode local_node;
+        local_node.id = config_.node_id;
+        local_node.host = config_.host;
+        local_node.port = config_.port;
+        local_node.healthy = true;
+
+        discovery_ = std::make_unique<kvai::infra::EtcdServiceDiscovery>(
+            config_.etcd_endpoints, config_.etcd_prefix, local_node, config_.etcd_lease_ttl_s);
+        auto discovery_status = discovery_->Start(&router_);
+        if (!discovery_status.ok()) {
+            kvai::infra::log::Warn("gateway", "etcd discovery failed, falling back to static routing",
+                                   {{"error", discovery_status.ToString()}});
+            discovery_.reset();
+        }
+    }
+
     service_ = std::make_unique<SemanticSearchService>(config_, thread_pool_, *kv_store_, *embedding_service_, *vector_index_, metrics_);
     auto status = SeedDemoData();
     if (!status.ok()) {
@@ -73,14 +91,19 @@ kvai::infra::Status InProcessGatewayServer::Start() {
     }
 
     started_ = true;
-    kvai::infra::Logger::Instance().Log(kvai::infra::LogLevel::kInfo, "gateway", "server started",
-                                        {{"host", config_.host}, {"port", std::to_string(config_.port)}});
+    kvai::infra::log::Info("gateway", "server started",
+                           {{"host", config_.host}, {"port", std::to_string(config_.port)}});
     return kvai::infra::Status::Ok();
 }
 
 kvai::infra::Status InProcessGatewayServer::Stop() {
     if (!started_) {
         return kvai::infra::Status::Ok();
+    }
+
+    if (discovery_) {
+        discovery_->Stop();
+        discovery_.reset();
     }
 
     auto status = kv_store_->FlushSnapshot();

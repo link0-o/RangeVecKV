@@ -2,6 +2,8 @@ build/
 dist/
 _CPack_Packages/
 vcpkg_installed/
+.vscode/
+.claude/
 
 data/
 

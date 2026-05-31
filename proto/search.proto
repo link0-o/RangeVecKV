@@ -12,6 +12,14 @@ message SemanticSearchRequest {
   string query = 2;
   uint32 top_k = 3;
   repeated SearchFilter filters = 4;
+  string collection = 5;
+}
+
+message SemanticSearchResponse {
+  string trace_id = 1;
+  repeated SearchHit hits = 2;
+  bool degraded = 3;
+  string message = 4;
 }
 
 message SearchHit {
@@ -20,13 +28,6 @@ message SearchHit {
   string snippet = 3;
   double score = 4;
   map<string, string> metadata = 5;
-}
-
-message SemanticSearchResponse {
-  string trace_id = 1;
-  repeated SearchHit hits = 2;
-  bool degraded = 3;
-  string message = 4;
 }
 
 message HealthCheckRequest {
@@ -38,9 +39,36 @@ message HealthCheckResponse {
   string status = 2;
   string version = 3;
   repeated string warnings = 4;
+  map<string, string> details = 5;
+}
+
+// Generic request for HTTP-only endpoints that use controller directly
+message HttpRequest {
+}
+
+// Generic response for HTTP-only endpoints that write directly to controller
+message HttpResponse {
 }
 
 service SearchService {
   rpc SemanticSearch(SemanticSearchRequest) returns (SemanticSearchResponse);
   rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+}
+
+// GatewayService handles all HTTP REST endpoints
+service GatewayService {
+  // GET/POST /v1/search
+  rpc Search(HttpRequest) returns (HttpResponse);
+  // GET /v1/router
+  rpc Router(HttpRequest) returns (HttpResponse);
+  // POST /v1/documents
+  rpc UpsertDocument(HttpRequest) returns (HttpResponse);
+  // DELETE /v1/documents
+  rpc DeleteDocument(HttpRequest) returns (HttpResponse);
+  // GET /healthz
+  rpc Healthz(HttpRequest) returns (HttpResponse);
+  // GET /metrics
+  rpc Metrics(HttpRequest) returns (HttpResponse);
+  // GET /openapi.yaml
+  rpc OpenApi(HttpRequest) returns (HttpResponse);
 }

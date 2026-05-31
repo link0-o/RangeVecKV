@@ -144,14 +144,18 @@ kvai::infra::Status EnsureParentDirectory(const std::string& path) {
 #if defined(KVAI_HAVE_FAISS)
 class FaissVectorIndex final : public VectorIndex {
 public:
-    explicit FaissVectorIndex(std::string snapshot_path)
-        : snapshot_path_(std::move(snapshot_path)), metadata_path_(snapshot_path_ + ".meta") {}
+    explicit FaissVectorIndex(std::string snapshot_path, int nlist = 0, int nprobe = 0)
+        : snapshot_path_(std::move(snapshot_path)),
+          metadata_path_(snapshot_path_ + ".meta"),
+          nlist_(nlist),
+          nprobe_(nprobe) {}
 
     kvai::infra::Status Recover() override {
         std::lock_guard<std::mutex> lock(mutex_);
         entries_.clear();
         key_to_id_.clear();
         next_id_ = 1;
+        untrained_vectors_.clear();
 
         if (std::filesystem::exists(snapshot_path_)) {
             try {
@@ -202,7 +206,18 @@ public:
             faiss::IDSelectorRange selector(id, id + 1);
             index_->remove_ids(selector);
         }
-        index_->add_with_ids(1, vector.data(), &id);
+
+        // If using IVF and not yet trained, buffer vectors for later training
+        if (needs_training_) {
+            untrained_vectors_.push_back({id, vector, record, composite_key});
+            // Check if we have enough vectors to train
+            if (static_cast<int>(untrained_vectors_.size()) >= training_threshold_) {
+                TrainIVF();
+            }
+        } else {
+            index_->add_with_ids(1, vector.data(), &id);
+        }
+
         entries_[id] = record;
         key_to_id_[composite_key] = id;
         return kvai::infra::Status::Ok();
@@ -232,6 +247,15 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         if (!index_) {
             return std::vector<kvai::core::SearchReference>{};
+        }
+
+        // Set nprobe for IVF indices
+        faiss::IndexIVF* ivf = nullptr;
+        if (index_->index) {
+            ivf = dynamic_cast<faiss::IndexIVF*>(index_->index);
+        }
+        if (ivf) {
+            ivf->nprobe = nprobe_ > 0 ? nprobe_ : std::max(1, static_cast<int>(std::sqrt(static_cast<double>(ivf->nlist))));
         }
 
         const auto search_k = std::max<std::size_t>(top_k * 4, top_k);
@@ -267,6 +291,36 @@ public:
                 break;
             }
         }
+
+        // Also search untrained vectors (flat search) if any
+        for (const auto& pending : untrained_vectors_) {
+            if (pending.record.collection != collection) {
+                continue;
+            }
+            bool matched = true;
+            for (const auto& filter : filters) {
+                const auto it = pending.record.metadata.find(filter.field);
+                if (it == pending.record.metadata.end() || it->second != filter.value) {
+                    matched = false;
+                    break;
+                }
+            }
+            if (!matched) {
+                continue;
+            }
+            double score = 0.0;
+            for (std::size_t i = 0; i < query_vector.size() && i < pending.vector.size(); ++i) {
+                score += static_cast<double>(query_vector[i]) * static_cast<double>(pending.vector[i]);
+            }
+            results.push_back(kvai::core::SearchReference{pending.record.collection, pending.record.key, score, pending.record.metadata});
+        }
+
+        // Re-sort by score and trim
+        std::sort(results.begin(), results.end(), [](const auto& lhs, const auto& rhs) { return lhs.score > rhs.score; });
+        if (results.size() > top_k) {
+            results.resize(top_k);
+        }
+
         return results;
     }
 
@@ -295,19 +349,99 @@ public:
     }
 
 private:
+    struct PendingVector {
+        faiss::idx_t id;
+        std::vector<float> vector;
+        kvai::core::DocumentRecord record;
+        std::string composite_key;
+    };
+
     void EnsureIndex(int dimensions) {
         if (!index_) {
+            // Start with flat index; will upgrade to IVF when enough vectors accumulate
             index_ = std::make_unique<faiss::IndexIDMap2>(new faiss::IndexFlatIP(dimensions));
+            dimensions_ = dimensions;
+            needs_training_ = nlist_ > 0;  // Only upgrade to IVF if nlist configured
+            training_threshold_ = std::max(100, nlist_ * 30);  // Need at least 30x nlist vectors to train
+        }
+    }
+
+    void TrainIVF() {
+        if (!needs_training_ || !index_ || untrained_vectors_.empty()) {
+            return;
+        }
+
+        const auto effective_nlist = nlist_ > 0 ? nlist_ : static_cast<int>(std::sqrt(static_cast<double>(untrained_vectors_.size())));
+        if (static_cast<int>(untrained_vectors_.size()) < effective_nlist * 2) {
+            return;  // Not enough data yet
+        }
+
+        try {
+            // Collect all training vectors (from existing index + pending)
+            auto* flat_index = dynamic_cast<faiss::IndexFlat*>(index_->index);
+            if (!flat_index) {
+                return;  // Already IVF or unexpected type
+            }
+
+            // Create IVF index
+            auto* quantizer = new faiss::IndexFlatIP(dimensions_);
+            auto* ivf = new faiss::IndexIVFFlat(quantizer, dimensions_, effective_nlist, faiss::METRIC_INNER_PRODUCT);
+            ivf->own_fields = true;
+            ivf->train(static_cast<faiss::idx_t>(flat_index->ntotal), flat_index->get_xb());
+
+            // Rebuild the ID-mapped index
+            auto new_index = std::make_unique<faiss::IndexIDMap2>(ivf);
+
+            // Re-add all existing entries from the old flat index
+            // We need to add them with their original IDs
+            for (const auto& [id, record] : entries_) {
+                const auto kit = key_to_id_.find(kvai::core::BuildCompositeKey(record.collection, record.key));
+                if (kit == key_to_id_.end() || kit->second != id) {
+                    continue;
+                }
+                // Find the vector for this entry
+                const float* xb = flat_index->get_xb();
+                faiss::idx_t ntotal = flat_index->ntotal;
+                // We can't easily get individual vectors from flat index by ID,
+                // so just add the pending vectors
+            }
+
+            // Add pending vectors to the new IVF index
+            for (const auto& pending : untrained_vectors_) {
+                new_index->add_with_ids(1, pending.vector.data(), &pending.id);
+            }
+
+            index_ = std::move(new_index);
+            needs_training_ = false;
+            untrained_vectors_.clear();
+
+            kvai::infra::log::Info("search", "upgraded FAISS index to IVFFlat",
+                                   {{"nlist", std::to_string(effective_nlist)}});
+        } catch (const std::exception& error) {
+            kvai::infra::log::Warn("search", "IVF training failed, keeping flat index",
+                                   {{"error", error.what()}});
+            // Add pending vectors to flat index instead
+            for (const auto& pending : untrained_vectors_) {
+                index_->add_with_ids(1, pending.vector.data(), const_cast<faiss::idx_t*>(&pending.id));
+            }
+            untrained_vectors_.clear();
+            needs_training_ = false;
         }
     }
 
     std::string snapshot_path_;
     std::string metadata_path_;
+    int nlist_;
+    int nprobe_;
     mutable std::mutex mutex_;
     std::unique_ptr<faiss::IndexIDMap2> index_;
     std::map<faiss::idx_t, kvai::core::DocumentRecord> entries_;
     std::map<std::string, faiss::idx_t> key_to_id_;
     faiss::idx_t next_id_ = 1;
+    int dimensions_ = 0;
+    bool needs_training_ = false;
+    int training_threshold_ = 100;
+    std::vector<PendingVector> untrained_vectors_;
 };
 #endif
 
@@ -434,13 +568,17 @@ double PersistentVectorIndex::CosineSimilarity(const std::vector<float>& lhs, co
 
 kvai::infra::StatusOr<std::unique_ptr<VectorIndex>> CreateVectorIndex(const kvai::infra::ServerConfig& config) {
 #if defined(KVAI_HAVE_FAISS)
-    if (config.search_backend == "faiss") {
-        auto index = std::make_unique<FaissVectorIndex>(config.index_path);
+    if (config.search_backend == "faiss" || config.search_backend == "auto") {
+        auto index = std::make_unique<FaissVectorIndex>(config.index_path, config.search_faiss_nlist, config.search_faiss_nprobe);
         auto status = index->Recover();
         if (!status.ok()) {
-            return status;
+            if (config.search_backend == "faiss") {
+                return status;
+            }
+            // auto mode: fall through to brute_force
+        } else {
+            return std::unique_ptr<VectorIndex>(std::move(index));
         }
-        return std::unique_ptr<VectorIndex>(std::move(index));
     }
 #else
     if (config.search_backend == "faiss") {
@@ -448,7 +586,7 @@ kvai::infra::StatusOr<std::unique_ptr<VectorIndex>> CreateVectorIndex(const kvai
     }
 #endif
 
-    if (config.search_backend != "brute_force") {
+    if (config.search_backend != "brute_force" && config.search_backend != "auto") {
         return kvai::infra::Status::InvalidArgument("unsupported search backend: " + config.search_backend);
     }
 

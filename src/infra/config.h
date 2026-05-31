@@ -18,9 +18,9 @@ struct ServerConfig {
     std::size_t rate_limit_per_second = 200;
     std::uint32_t ai_timeout_ms = 25;
     std::string default_collection = "documents";
-    std::string ai_backend = "deterministic";
-    std::string storage_backend = "wal";
-    std::string search_backend = "brute_force";
+    std::string ai_backend = "auto";
+    std::string storage_backend = "auto";
+    std::string search_backend = "auto";
     std::string discovery_backend = "static";
     std::string node_id = "node-local";
     std::size_t replication_factor = 1;
@@ -35,8 +35,16 @@ struct ServerConfig {
     std::string snapshot_path = "./data/kvai.snapshot";
     std::string db_path = "./data/rocksdb";
     std::string index_path = "./data/kvai.index";
+    int search_faiss_nlist = 0;
+    int search_faiss_nprobe = 0;
     std::string openapi_path = "./docs/openapi.yaml";
     std::string log_level = "info";
+    std::string log_file_path;
+    std::size_t log_file_max_size_mb = 10;
+    std::size_t log_file_max_files = 3;
+    std::string etcd_endpoints = "http://127.0.0.1:2379";
+    std::string etcd_prefix = "/rangeveckv/nodes/";
+    std::uint32_t etcd_lease_ttl_s = 10;
 };
 
 class ConfigLoader {

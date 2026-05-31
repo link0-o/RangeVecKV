@@ -1,0 +1,12 @@
+src/ai/document.cpp 预处理不要用 HashPayload ，改成 文本分词（Tokenizer）
+src/ai/document.cpp 开一个线程不够，推荐改成工业级线程池
+序列化和反序列化全部都用 protobuf,包括但不限于 src/infra和 src/core src/search/vector_index
+一致性哈希路由能不能把互斥锁把他改成读写锁 
+日志 改成 spdlog
+线程池 改成 工业级线程池 
+yaml加上支持解析嵌套yaml
+src/gateway/http_runtime.cpp 的服务器太简陋，就一个epoll,解析也是手写，建议用brpc
+src/gateway/auth.cpp 鉴权写的不安全
+semantic_search_service.cpp 超时降级后的搜索写的太简陋
+健康检查没做 cpu 和 磁盘 利用率
+spdlog 改成在debug情况才会输出控制台，非debug模式只写入文件

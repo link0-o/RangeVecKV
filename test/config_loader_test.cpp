@@ -22,35 +22,133 @@ int main() {
     std::filesystem::remove_all(temp_dir);
     std::filesystem::create_directories(temp_dir);
 
-    const auto config_path = temp_dir / "server.yaml";
+    int failures = 0;
+
+    // --- Test 1: Flat dotted-key format (always available) ---
     {
-        std::ofstream output(config_path);
-        output << "gateway.require_api_key: true\n";
-        output << "gateway.api_key: ${KVAI_TEST_API_KEY}\n";
-        output << "cluster.nodes: ${KVAI_TEST_CLUSTER}\n";
-        output << "storage.enable_demo_data: false\n";
+        const auto config_path = temp_dir / "flat.yaml";
+        {
+            std::ofstream output(config_path);
+            output << "gateway.require_api_key: true\n";
+            output << "gateway.api_key: ${KVAI_TEST_API_KEY}\n";
+            output << "cluster.nodes: ${KVAI_TEST_CLUSTER}\n";
+            output << "storage.enable_demo_data: false\n";
+            output << "logging.level: debug\n";
+            output << "logging.file_path: /tmp/kvai.log\n";
+            output << "cluster.etcd_endpoints: http://etcd:2379\n";
+        }
+
+        ::setenv("KVAI_TEST_API_KEY", "integration-secret", 1);
+        ::setenv("KVAI_TEST_CLUSTER", "node-a@127.0.0.1:8080", 1);
+
+        auto config = kvai::infra::ConfigLoader::LoadFromFile(config_path.string());
+        if (!Expect(config.ok(), "flat: config loading failed")) {
+            failures += 7;
+        } else {
+            if (!Expect(config.value().require_api_key, "flat: api key flag not parsed")) ++failures;
+            if (!Expect(config.value().api_key == "integration-secret", "flat: api key env expansion failed")) ++failures;
+            if (!Expect(config.value().cluster_nodes == "node-a@127.0.0.1:8080", "flat: cluster env expansion failed")) ++failures;
+            if (!Expect(!config.value().enable_demo_data, "flat: boolean false parsing failed")) ++failures;
+            if (!Expect(config.value().log_level == "debug", "flat: logging.level not parsed")) ++failures;
+            if (!Expect(config.value().log_file_path == "/tmp/kvai.log", "flat: logging.file_path not parsed")) ++failures;
+            if (!Expect(config.value().etcd_endpoints == "http://etcd:2379", "flat: etcd_endpoints not parsed")) ++failures;
+        }
     }
 
-    ::setenv("KVAI_TEST_API_KEY", "integration-secret", 1);
-    ::setenv("KVAI_TEST_CLUSTER", "node-a@127.0.0.1:8080", 1);
+#if defined(KVAI_HAVE_YAML_CPP)
+    // --- Test 2: Nested YAML format (requires yaml-cpp) ---
+    {
+        const auto config_path = temp_dir / "nested.yaml";
+        {
+            std::ofstream output(config_path);
+            output << "server:\n";
+            output << "  host: 0.0.0.0\n";
+            output << "  port: 9090\n";
+            output << "  worker_threads: 8\n";
+            output << "gateway:\n";
+            output << "  require_api_key: true\n";
+            output << "  api_key: ${KVAI_TEST_API_KEY}\n";
+            output << "  rate_limit_per_second: 500\n";
+            output << "ai:\n";
+            output << "  backend: deterministic\n";
+            output << "  timeout_ms: 50\n";
+            output << "  embedding_dimensions: 64\n";
+            output << "search:\n";
+            output << "  max_top_k: 30\n";
+            output << "  backend: brute_force\n";
+            output << "storage:\n";
+            output << "  backend: wal\n";
+            output << "  enable_demo_data: false\n";
+            output << "  read_only_mode: true\n";
+            output << "cluster:\n";
+            output << "  node_id: test-node\n";
+            output << "  nodes: ${KVAI_TEST_CLUSTER}\n";
+            output << "  etcd_endpoints: http://etcd:2379\n";
+            output << "  etcd_lease_ttl_s: 20\n";
+            output << "security:\n";
+            output << "  tls_mode: enabled\n";
+            output << "logging:\n";
+            output << "  level: debug\n";
+            output << "  file_path: /tmp/kvai.log\n";
+            output << "  file_max_size_mb: 5\n";
+            output << "  file_max_files: 2\n";
+        }
 
-    auto config = kvai::infra::ConfigLoader::LoadFromFile(config_path.string());
-    if (!Expect(config.ok(), "config loading failed")) {
-        return 1;
+        ::setenv("KVAI_TEST_API_KEY", "nested-secret", 1);
+        ::setenv("KVAI_TEST_CLUSTER", "node-b@10.0.0.1:9090", 1);
+
+        auto config = kvai::infra::ConfigLoader::LoadFromFile(config_path.string());
+        if (!Expect(config.ok(), "nested: config loading failed")) {
+            failures += 16;
+        } else {
+            if (!Expect(config.value().host == "0.0.0.0", "nested: host not parsed")) ++failures;
+            if (!Expect(config.value().port == 9090, "nested: port not parsed")) ++failures;
+            if (!Expect(config.value().worker_threads == 8, "nested: worker_threads not parsed")) ++failures;
+            if (!Expect(config.value().require_api_key, "nested: api key flag not parsed")) ++failures;
+            if (!Expect(config.value().api_key == "nested-secret", "nested: api key env expansion failed")) ++failures;
+            if (!Expect(config.value().rate_limit_per_second == 500, "nested: rate limit not parsed")) ++failures;
+            if (!Expect(config.value().ai_timeout_ms == 50, "nested: ai timeout not parsed")) ++failures;
+            if (!Expect(config.value().embedding_dimensions == 64, "nested: embedding dimensions not parsed")) ++failures;
+            if (!Expect(config.value().max_top_k == 30, "nested: max_top_k not parsed")) ++failures;
+            if (!Expect(config.value().cluster_nodes == "node-b@10.0.0.1:9090", "nested: cluster env expansion failed")) ++failures;
+            if (!Expect(config.value().etcd_endpoints == "http://etcd:2379", "nested: etcd endpoints not parsed")) ++failures;
+            if (!Expect(config.value().etcd_lease_ttl_s == 20, "nested: etcd lease ttl not parsed")) ++failures;
+            if (!Expect(config.value().tls_mode == "enabled", "nested: tls_mode not parsed")) ++failures;
+            if (!Expect(config.value().log_level == "debug", "nested: log level not parsed")) ++failures;
+            if (!Expect(config.value().log_file_path == "/tmp/kvai.log", "nested: log file path not parsed")) ++failures;
+            if (!Expect(config.value().read_only_mode, "nested: read_only_mode not parsed")) ++failures;
+        }
     }
-    if (!Expect(config.value().require_api_key, "api key flag not parsed")) {
-        return 1;
+
+    // --- Test 3: Flat format detected by yaml-cpp should still work ---
+    {
+        const auto config_path = temp_dir / "flat-via-yamlcpp.yaml";
+        {
+            std::ofstream output(config_path);
+            output << "gateway.require_api_key: true\n";
+            output << "gateway.api_key: ${KVAI_TEST_API_KEY}\n";
+            output << "storage.enable_demo_data: false\n";
+        }
+
+        ::setenv("KVAI_TEST_API_KEY", "flat-yamlcpp-secret", 1);
+
+        auto config = kvai::infra::ConfigLoader::LoadFromFile(config_path.string());
+        if (!Expect(config.ok(), "flat-via-yamlcpp: config loading failed")) {
+            failures += 3;
+        } else {
+            if (!Expect(config.value().require_api_key, "flat-via-yamlcpp: api key flag not parsed")) ++failures;
+            if (!Expect(config.value().api_key == "flat-yamlcpp-secret", "flat-via-yamlcpp: env expansion failed")) ++failures;
+            if (!Expect(!config.value().enable_demo_data, "flat-via-yamlcpp: boolean parsing failed")) ++failures;
+        }
     }
-    if (!Expect(config.value().api_key == "integration-secret", "api key env expansion failed")) {
-        return 1;
-    }
-    if (!Expect(config.value().cluster_nodes == "node-a@127.0.0.1:8080", "cluster env expansion failed")) {
-        return 1;
-    }
-    if (!Expect(!config.value().enable_demo_data, "boolean false parsing failed")) {
-        return 1;
+#endif
+
+    // --- Test 4: Missing config file ---
+    {
+        auto config = kvai::infra::ConfigLoader::LoadFromFile("/nonexistent/path.yaml");
+        if (!Expect(!config.ok(), "missing file should return error")) ++failures;
     }
 
     std::filesystem::remove_all(temp_dir);
-    return 0;
+    return failures > 0 ? 1 : 0;
 }

@@ -1,37 +1,29 @@
 #pragma once
 
-#include <initializer_list>
-#include <mutex>
-#include <ostream>
+#include <map>
 #include <string>
-#include <utility>
 
-namespace kvai::infra {
+#include "infra/config.h"
 
-enum class LogLevel {
-    kDebug,
-    kInfo,
-    kWarn,
-    kError,
-};
+namespace kvai::infra::log {
 
-class Logger {
-public:
-    static Logger& Instance();
+/// Initialize the logging subsystem from server config.
+/// Must be called once from main() before any log output.
+/// When spdlog is available, configures async logger with console + rotating
+/// file sinks. When spdlog is unavailable, falls back to synchronous
+/// stdout/stderr output.
+void ConfigureLogger(const ServerConfig& config);
 
-    void SetLevel(LogLevel level);
-    void Log(LogLevel level,
-             const std::string& component,
-             const std::string& message,
-             std::initializer_list<std::pair<std::string, std::string>> fields = {});
+/// Set the global log level. Valid values: "debug", "info", "warn", "error".
+void SetLevel(const std::string& level);
 
-private:
-    Logger() = default;
+void Debug(const std::string& component, const std::string& message,
+           const std::map<std::string, std::string>& fields = {});
+void Info(const std::string& component, const std::string& message,
+          const std::map<std::string, std::string>& fields = {});
+void Warn(const std::string& component, const std::string& message,
+          const std::map<std::string, std::string>& fields = {});
+void Error(const std::string& component, const std::string& message,
+           const std::map<std::string, std::string>& fields = {});
 
-    [[nodiscard]] static const char* ToString(LogLevel level);
-
-    std::mutex mutex_;
-    LogLevel level_ = LogLevel::kInfo;
-};
-
-}  // namespace kvai::infra
+}  // namespace kvai::infra::log

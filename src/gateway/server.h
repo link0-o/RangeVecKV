@@ -9,6 +9,7 @@
 #include "gateway/semantic_search_service.h"
 #include "infra/cluster_routing.h"
 #include "infra/config.h"
+#include "infra/etcd_discovery.h"
 #include "infra/metrics.h"
 #include "infra/status.h"
 #include "infra/thread_pool.h"
@@ -44,6 +45,7 @@ private:
     kvai::infra::MetricsRegistry metrics_;
     FixedWindowRateLimiter rate_limiter_;
     std::unique_ptr<SemanticSearchService> service_;
+    std::unique_ptr<kvai::infra::EtcdServiceDiscovery> discovery_;
     bool started_ = false;
 };
 

@@ -1,6 +1,7 @@
-model.name: deterministic-fallback
-model.backend: local-hash
-model.embedding_dimensions: 32
-model.batch_size: 64
-model.device: cpu
-model.onnx_path: ${KVAI_MODEL_PATH}
+model:
+  name: deterministic-fallback
+  backend: local-hash
+  embedding_dimensions: 32
+  batch_size: 64
+  device: cpu
+  onnx_path: ${KVAI_MODEL_PATH}

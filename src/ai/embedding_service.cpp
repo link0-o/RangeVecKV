@@ -1,7 +1,10 @@
 #include "ai/embedding_service.h"
 
 #include <cmath>
+#include <filesystem>
 #include <functional>
+
+#include "infra/logging.h"
 
 #if defined(KVAI_HAVE_ONNXRUNTIME)
 #include <onnxruntime/core/session/onnxruntime_cxx_api.h>
@@ -154,15 +157,30 @@ kvai::infra::StatusOr<Embedding> DeterministicEmbeddingService::EmbedPayload(con
 
 kvai::infra::StatusOr<std::unique_ptr<EmbeddingService>> CreateEmbeddingService(const kvai::infra::ServerConfig& config) {
 #if defined(KVAI_HAVE_ONNXRUNTIME)
-    if (config.ai_backend == "onnxruntime") {
-        if (config.model_path.empty()) {
-            return kvai::infra::Status::InvalidArgument("ai.model_path must be configured for onnxruntime backend");
+    if (config.ai_backend == "onnxruntime" || config.ai_backend == "auto") {
+        if (!config.model_path.empty()) {
+            namespace fs = std::filesystem;
+            if (fs::exists(config.model_path)) {
+                try {
+                    kvai::infra::log::Info("ai", "initializing ONNX Runtime embedding service", {{"model_path", config.model_path}});
+                    return std::make_unique<OnnxRuntimeEmbeddingService>(config);
+                } catch (const Ort::Exception& error) {
+                    kvai::infra::log::Warn("ai", "ONNX Runtime initialization failed, falling back to deterministic",
+                                           {{"error", error.what()}});
+                }
+            } else {
+                kvai::infra::log::Warn("ai", "model file not found, falling back to deterministic",
+                                       {{"model_path", config.model_path}});
+            }
         }
-        try {
-            return std::make_unique<OnnxRuntimeEmbeddingService>(config);
-        } catch (const Ort::Exception& error) {
-            return kvai::infra::Status::Unavailable(std::string("failed to initialize onnxruntime session: ") + error.what());
+        if (config.ai_backend == "onnxruntime") {
+            // Explicitly requested but unavailable
+            if (config.model_path.empty()) {
+                return kvai::infra::Status::InvalidArgument("ai.model_path must be configured for onnxruntime backend");
+            }
+            return kvai::infra::Status::Unavailable("onnxruntime backend requested but model file not found: " + config.model_path);
         }
+        // auto mode: fall through to deterministic
     }
 #else
     if (config.ai_backend == "onnxruntime") {
@@ -170,8 +188,11 @@ kvai::infra::StatusOr<std::unique_ptr<EmbeddingService>> CreateEmbeddingService(
     }
 #endif
 
-    if (config.ai_backend != "deterministic") {
+    if (config.ai_backend != "deterministic" && config.ai_backend != "auto") {
         return kvai::infra::Status::InvalidArgument("unsupported ai backend: " + config.ai_backend);
+    }
+    if (config.ai_backend == "auto") {
+        kvai::infra::log::Info("ai", "using deterministic embedding fallback (no ONNX Runtime available)");
     }
     return std::unique_ptr<EmbeddingService>(std::make_unique<DeterministicEmbeddingService>(config.embedding_dimensions));
 }

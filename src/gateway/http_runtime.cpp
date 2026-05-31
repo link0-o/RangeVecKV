@@ -14,40 +14,15 @@
 #include <sstream>
 #include <string>
 
-#include "core/document.h"
+#include <nlohmann/json.hpp>
 
+#include "core/document.h"
+#include "gateway/json_helpers.h"
 #include "infra/logging.h"
 
 namespace kvai::gateway {
 
 namespace {
-
-std::string JsonEscape(const std::string& value) {
-    std::string escaped;
-    escaped.reserve(value.size());
-    for (char ch : value) {
-        switch (ch) {
-        case '\\':
-        case '"':
-            escaped.push_back('\\');
-            escaped.push_back(ch);
-            break;
-        case '\n':
-            escaped += "\\n";
-            break;
-        case '\r':
-            escaped += "\\r";
-            break;
-        case '\t':
-            escaped += "\\t";
-            break;
-        default:
-            escaped.push_back(ch);
-            break;
-        }
-    }
-    return escaped;
-}
 
 std::string UrlDecode(const std::string& value) {
     std::string decoded;
@@ -84,7 +59,7 @@ std::map<std::string, std::string> ParseQuery(const std::string& query_string) {
 }
 
 std::map<std::string, std::string> ParseHeaders(std::istream& stream) {
-    std::map<std::string, std::string> headers;         // "host" -> "example.com"
+    std::map<std::string, std::string> headers;
     std::string header_line;
     while (std::getline(stream, header_line)) {
         if (!header_line.empty() && header_line.back() == '\r') {
@@ -106,194 +81,6 @@ std::map<std::string, std::string> ParseHeaders(std::istream& stream) {
         headers[std::move(key)] = std::move(value);
     }
     return headers;
-}
-
-std::string ExtractJsonString(const std::string& body, const std::string& key) {
-    const std::string field = std::string("\"") + key + '"';
-    const auto key_pos = body.find(field);
-    if (key_pos == std::string::npos) {
-        return {};
-    }
-    const auto colon_pos = body.find(':', key_pos + field.size());
-    const auto quote_pos = body.find('"', colon_pos + 1);
-    if (colon_pos == std::string::npos || quote_pos == std::string::npos) {
-        return {};
-    }
-
-    std::string value;
-    bool escaping = false;
-    for (std::size_t index = quote_pos + 1; index < body.size(); ++index) {
-        const char ch = body[index];
-        if (escaping) {
-            value.push_back(ch == 'n' ? '\n' : ch);
-            escaping = false;
-            continue;
-        }
-        if (ch == '\\') {
-            escaping = true;
-            continue;
-        }
-        if (ch == '"') {
-            return value;
-        }
-        value.push_back(ch);
-    }
-
-    return {};
-}
-
-std::size_t ExtractJsonSize(const std::string& body, const std::string& key, std::size_t default_value) {
-    const std::string field = std::string("\"") + key + '"';
-    const auto key_pos = body.find(field);
-    if (key_pos == std::string::npos) {
-        return default_value;
-    }
-    const auto colon_pos = body.find(':', key_pos + field.size());
-    if (colon_pos == std::string::npos) {
-        return default_value;
-    }
-    std::size_t begin = colon_pos + 1;
-    while (begin < body.size() && std::isspace(static_cast<unsigned char>(body[begin])) != 0) {
-        ++begin;
-    }
-    std::size_t end = begin;
-    while (end < body.size() && std::isdigit(static_cast<unsigned char>(body[end])) != 0) {
-        ++end;
-    }
-    return end > begin ? static_cast<std::size_t>(std::stoul(body.substr(begin, end - begin))) : default_value;
-}
-
-std::map<std::string, std::string> ExtractJsonStringMap(const std::string& body, const std::string& key) {
-    std::map<std::string, std::string> values;
-    const std::string field = std::string("\"") + key + '"';
-    const auto key_pos = body.find(field);
-    if (key_pos == std::string::npos) {
-        return values;
-    }
-    const auto open_brace = body.find('{', key_pos + field.size());
-    if (open_brace == std::string::npos) {
-        return values;
-    }
-
-    int depth = 0;
-    std::size_t close_brace = open_brace;
-    for (; close_brace < body.size(); ++close_brace) {
-        if (body[close_brace] == '{') {
-            ++depth;
-        } else if (body[close_brace] == '}') {
-            --depth;
-            if (depth == 0) {
-                break;
-            }
-        }
-    }
-    if (close_brace <= open_brace) {
-        return values;
-    }
-
-    const auto object_body = body.substr(open_brace + 1, close_brace - open_brace - 1);
-    std::stringstream stream(object_body);
-    std::string token;
-    while (std::getline(stream, token, ',')) {
-        const auto colon_pos = token.find(':');
-        if (colon_pos == std::string::npos) {
-            continue;
-        }
-        auto map_key = token.substr(0, colon_pos);
-        auto map_value = token.substr(colon_pos + 1);
-        map_key.erase(std::remove_if(map_key.begin(), map_key.end(), [](char ch) { return std::isspace(static_cast<unsigned char>(ch)) != 0 || ch == '"'; }), map_key.end());
-        map_value.erase(std::remove_if(map_value.begin(), map_value.end(), [](char ch) { return std::isspace(static_cast<unsigned char>(ch)) != 0 || ch == '"'; }), map_value.end());
-        if (!map_key.empty()) {
-            values[std::move(map_key)] = std::move(map_value);
-        }
-    }
-    return values;
-}
-
-std::string MakeJsonResponse(const HealthReport& report) {
-    std::ostringstream output;
-    output << "{\n"
-           << "  \"trace_id\": \"" << JsonEscape(report.trace_id) << "\",\n"
-           << "  \"status\": \"" << JsonEscape(report.status) << "\",\n"
-           << "  \"version\": \"" << JsonEscape(report.version) << "\",\n"
-           << "  \"warnings\": [";
-    for (std::size_t index = 0; index < report.warnings.size(); ++index) {
-        if (index > 0) {
-            output << ", ";
-        }
-        output << '"' << JsonEscape(report.warnings[index]) << '"';
-    }
-    output << "],\n  \"details\": {";
-    std::size_t emitted = 0;
-    for (const auto& [key, value] : report.details) {
-        if (emitted++ > 0) {
-            output << ", ";
-        }
-        output << '"' << JsonEscape(key) << "\": \"" << JsonEscape(value) << '"';
-    }
-    output << "}\n}\n";
-    return output.str();
-}
-
-std::string MakeJsonResponse(const SemanticSearchResult& result) {
-    std::ostringstream output;
-    output << "{\n"
-           << "  \"trace_id\": \"" << JsonEscape(result.trace_id) << "\",\n"
-           << "  \"degraded\": " << (result.degraded ? "true" : "false") << ",\n"
-           << "  \"message\": \"" << JsonEscape(result.message) << "\",\n"
-           << "  \"hits\": [\n";
-    for (std::size_t index = 0; index < result.hits.size(); ++index) {
-        const auto& hit = result.hits[index];
-        output << "    {\"key\": \"" << JsonEscape(hit.key) << "\", \"title\": \"" << JsonEscape(hit.title)
-               << "\", \"snippet\": \"" << JsonEscape(hit.snippet) << "\", \"score\": " << hit.score << ", \"metadata\": {";
-        std::size_t metadata_index = 0;
-        for (const auto& [key, value] : hit.metadata) {
-            if (metadata_index++ > 0) {
-                output << ", ";
-            }
-            output << '"' << JsonEscape(key) << "\": \"" << JsonEscape(value) << '"';
-        }
-        output << "}}";
-        if (index + 1 < result.hits.size()) {
-            output << ',';
-        }
-        output << '\n';
-    }
-    output << "  ]\n}\n";
-    return output.str();
-}
-
-std::string BuildHttpResponse(int status_code, const std::string& status_text, const std::string& content_type, const std::string& body) {
-    std::ostringstream output;
-    output << "HTTP/1.1 " << status_code << ' ' << status_text << "\r\n"
-           << "Content-Type: " << content_type << "\r\n"
-           << "Content-Length: " << body.size() << "\r\n"
-           << "Connection: close\r\n\r\n"
-           << body;
-    return output.str();
-}
-
-std::string MakeRouteResponse(const kvai::infra::RouteDecision& route) {
-    std::ostringstream output;
-    output << "{\n"
-           << "  \"has_primary\": " << (route.has_primary ? "true" : "false") << ",\n"
-           << "  \"local_owner\": " << (route.local_owner ? "true" : "false") << ",\n"
-           << "  \"primary\": {\"id\": \"" << JsonEscape(route.primary.id) << "\", \"host\": \"" << JsonEscape(route.primary.host)
-           << "\", \"port\": " << route.primary.port << "},\n"
-           << "  \"replicas\": [";
-    for (std::size_t index = 0; index < route.replicas.size(); ++index) {
-        if (index > 0) {
-            output << ", ";
-        }
-        const auto& replica = route.replicas[index];
-        output << "{\"id\": \"" << JsonEscape(replica.id) << "\", \"host\": \"" << JsonEscape(replica.host) << "\", \"port\": " << replica.port << "}";
-    }
-    output << "]\n}\n";
-    return output.str();
-}
-
-std::string MakeStatusResponse(const std::string& message) {
-    return std::string("{\"message\": \"") + JsonEscape(message) + "\"}\n";
 }
 
 std::vector<SearchFilter> ExtractFilters(const std::map<std::string, std::string>& params) {
@@ -354,10 +141,9 @@ kvai::infra::Status HttpGatewayRuntime::Start() {
 
     accept_thread_ = std::thread([this]() { AcceptLoop(); });
     started_ = true;
-    kvai::infra::Logger::Instance().Log(kvai::infra::LogLevel::kInfo,
-                                        "http-runtime",
-                                        "http gateway listening",
-                                        {{"host", config_.host}, {"port", std::to_string(config_.port)}});
+    kvai::infra::log::Info("http-runtime",
+                           "http gateway listening",
+                           {{"host", config_.host}, {"port", std::to_string(config_.port)}});
     return kvai::infra::Status::Ok();
 }
 
@@ -397,10 +183,9 @@ void HttpGatewayRuntime::AcceptLoop() {
             if (stopping_.load()) {
                 return;
             }
-            kvai::infra::Logger::Instance().Log(kvai::infra::LogLevel::kWarn,
-                                                "http-runtime",
-                                                "accept failed",
-                                                {{"error", std::strerror(errno)}});
+            kvai::infra::log::Warn("http-runtime",
+                                   "accept failed",
+                                   {{"error", std::strerror(errno)}});
             continue;
         }
 
@@ -471,7 +256,9 @@ void HttpGatewayRuntime::HandleClient(int client_fd) {
     if (!public_route) {
         const auto auth_status = authenticator_.Authenticate(headers);
         if (!auth_status.ok()) {
-            response = BuildHttpResponse(401, "Unauthorized", "application/json", MakeStatusResponse(auth_status.ToString()));
+            nlohmann::json error_json;
+            error_json["message"] = auth_status.ToString();
+            response = json::BuildHttpResponse(401, "Unauthorized", "application/json", error_json.dump());
             (void)::send(client_fd, response.data(), response.size(), 0);
             ::shutdown(client_fd, SHUT_RDWR);
             ::close(client_fd);
@@ -480,11 +267,11 @@ void HttpGatewayRuntime::HandleClient(int client_fd) {
     }
 
     if (method == "GET" && path == "/healthz") {
-        response = BuildHttpResponse(200, "OK", "application/json", MakeJsonResponse(server_.HealthCheck("")));
+        response = json::BuildHttpResponse(200, "OK", "application/json", json::ToJson(server_.HealthCheck("")).dump());
     } else if (method == "GET" && path == "/metrics") {
-        response = BuildHttpResponse(200, "OK", "text/plain; version=0.0.4", server_.Metrics().RenderPrometheus());
+        response = json::BuildHttpResponse(200, "OK", "text/plain; version=0.0.4", server_.Metrics().RenderPrometheus());
     } else if (method == "GET" && (path == "/openapi" || path == "/openapi.yaml")) {
-        response = BuildHttpResponse(200, "OK", "application/yaml", server_.OpenApiSpec());
+        response = json::BuildHttpResponse(200, "OK", "application/yaml", server_.OpenApiSpec());
     } else if ((method == "GET" || method == "POST") && path == "/v1/search") {
         SemanticSearchQuery query;
         if (const auto iterator = headers.find("x-trace-id"); iterator != headers.end()) {
@@ -503,47 +290,67 @@ void HttpGatewayRuntime::HandleClient(int client_fd) {
             }
             query.filters = ExtractFilters(params);
         } else {
-            query.query = ExtractJsonString(body, "query");
-            query.collection = ExtractJsonString(body, "collection");
-            query.top_k = ExtractJsonSize(body, "top_k", query.top_k);
-            if (const auto iterator = ExtractJsonStringMap(body, "filters"); !iterator.empty()) {
-                for (const auto& [key, value] : iterator) {
-                    query.filters.push_back(SearchFilter{key, value});
+            try {
+                auto body_json = nlohmann::json::parse(body, nullptr, false);
+                if (!body_json.is_discarded()) {
+                    auto parsed = json::ParseSearchQuery(body_json, true);
+                    if (parsed.ok()) {
+                        query.query = parsed.value().query.empty() ? query.query : parsed.value().query;
+                        query.collection = parsed.value().collection.empty() ? query.collection : parsed.value().collection;
+                        if (parsed.value().top_k != 10) {
+                            query.top_k = parsed.value().top_k;
+                        }
+                        query.filters = parsed.value().filters;
+                    }
                 }
+            } catch (...) {
+                // Malformed JSON — proceed with defaults
             }
         }
 
         auto result = server_.Search(query);
         if (!result.ok()) {
-            response = BuildHttpResponse(503,
-                                         "Service Unavailable",
-                                         "application/json",
-                                         std::string("{\"error\": \"") + JsonEscape(result.status().ToString()) + "\"}\n");
+            nlohmann::json error_json;
+            error_json["error"] = result.status().ToString();
+            response = json::BuildHttpResponse(503, "Service Unavailable", "application/json", error_json.dump());
         } else {
-            response = BuildHttpResponse(200, "OK", "application/json", MakeJsonResponse(result.value()));
+            response = json::BuildHttpResponse(200, "OK", "application/json", json::ToJson(result.value()).dump());
         }
     } else if (method == "GET" && path == "/v1/router") {
         const auto params = ParseQuery(query_string);
         const auto collection = params.count("collection") == 0 ? std::string() : params.at("collection");
         const auto key = params.count("key") == 0 ? std::string() : params.at("key");
-        response = BuildHttpResponse(200, "OK", "application/json", MakeRouteResponse(server_.DescribeRoute(collection, key)));
+        response = json::BuildHttpResponse(200, "OK", "application/json", json::ToJson(server_.DescribeRoute(collection, key)).dump());
     } else if (method == "POST" && path == "/v1/documents") {
         kvai::core::DocumentRecord record;
         if (const auto iterator = headers.find("x-trace-id"); iterator != headers.end()) {
             record.metadata["trace_id"] = iterator->second;
         }
-        record.collection = ExtractJsonString(body, "collection");
-        record.key = ExtractJsonString(body, "key");
-        record.title = ExtractJsonString(body, "title");
-        record.body = ExtractJsonString(body, "body");
-        const auto metadata = ExtractJsonStringMap(body, "metadata");
-        record.metadata.insert(metadata.begin(), metadata.end());
+        try {
+            auto body_json = nlohmann::json::parse(body, nullptr, false);
+            if (!body_json.is_discarded()) {
+                auto parsed = json::ParseDocumentUpsert(body_json);
+                if (parsed.ok()) {
+                    record.collection = parsed.value().collection.empty() ? record.collection : parsed.value().collection;
+                    record.key = parsed.value().key.empty() ? record.key : parsed.value().key;
+                    record.title = parsed.value().title;
+                    record.body = parsed.value().body;
+                    record.metadata.insert(parsed.value().metadata.begin(), parsed.value().metadata.end());
+                }
+            }
+        } catch (...) {
+            // Malformed JSON — proceed with defaults
+        }
 
         auto status = server_.UpsertDocument(record, headers.count("x-trace-id") == 0 ? std::string() : headers.at("x-trace-id"));
         if (!status.ok()) {
-            response = BuildHttpResponse(503, "Service Unavailable", "application/json", MakeStatusResponse(status.ToString()));
+            nlohmann::json error_json;
+            error_json["message"] = status.ToString();
+            response = json::BuildHttpResponse(503, "Service Unavailable", "application/json", error_json.dump());
         } else {
-            response = BuildHttpResponse(200, "OK", "application/json", MakeStatusResponse("document upserted"));
+            nlohmann::json ok_json;
+            ok_json["message"] = "document upserted";
+            response = json::BuildHttpResponse(200, "OK", "application/json", ok_json.dump());
         }
     } else if (method == "DELETE" && path == "/v1/documents") {
         const auto params = ParseQuery(query_string);
@@ -551,12 +358,18 @@ void HttpGatewayRuntime::HandleClient(int client_fd) {
         const auto key = params.count("key") == 0 ? std::string() : params.at("key");
         auto status = server_.DeleteDocument(collection, key, headers.count("x-trace-id") == 0 ? std::string() : headers.at("x-trace-id"));
         if (!status.ok()) {
-            response = BuildHttpResponse(503, "Service Unavailable", "application/json", MakeStatusResponse(status.ToString()));
+            nlohmann::json error_json;
+            error_json["message"] = status.ToString();
+            response = json::BuildHttpResponse(503, "Service Unavailable", "application/json", error_json.dump());
         } else {
-            response = BuildHttpResponse(200, "OK", "application/json", MakeStatusResponse("document deleted"));
+            nlohmann::json ok_json;
+            ok_json["message"] = "document deleted";
+            response = json::BuildHttpResponse(200, "OK", "application/json", ok_json.dump());
         }
     } else {
-        response = BuildHttpResponse(404, "Not Found", "application/json", "{\"error\": \"route not found\"}\n");
+        nlohmann::json error_json;
+        error_json["error"] = "route not found";
+        response = json::BuildHttpResponse(404, "Not Found", "application/json", error_json.dump());
     }
 
     (void)::send(client_fd, response.data(), response.size(), 0);

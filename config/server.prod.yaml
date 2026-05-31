@@ -1,28 +1,49 @@
-server.host: 0.0.0.0
-server.port: 8080
-server.worker_threads: 8
-server.graceful_shutdown_timeout_ms: 8000
-gateway.rate_limit_per_second: 1000
-gateway.openapi_path: /opt/rangeveckv/share/rangeveckv/docs/openapi.yaml
-gateway.require_api_key: true
-gateway.api_key: ${KVAI_API_KEY}
-search.max_top_k: 50
-search.backend: brute_force
-search.index_path: /opt/rangeveckv/data/kvai.index
-ai.timeout_ms: 30
-ai.backend: deterministic
-ai.model_path: ${KVAI_MODEL_PATH}
-ai.embedding_dimensions: 32
-storage.default_collection: documents
-storage.backend: wal
-storage.read_only_mode: false
-storage.enable_demo_data: false
-storage.wal_path: /opt/rangeveckv/data/kvai.wal
-storage.snapshot_path: /opt/rangeveckv/data/kvai.snapshot
-storage.db_path: /opt/rangeveckv/data/rocksdb
-cluster.discovery_backend: static
-cluster.node_id: node-local
-cluster.replication_factor: 1
-cluster.nodes: ${KVAI_CLUSTER_NODES}
-security.tls_mode: ${KVAI_TLS_MODE}
-log.level: info
+server:
+  host: 0.0.0.0
+  port: 8080
+  worker_threads: 8
+  graceful_shutdown_timeout_ms: 8000
+
+gateway:
+  rate_limit_per_second: 1000
+  openapi_path: /opt/rangeveckv/share/rangeveckv/docs/openapi.yaml
+  require_api_key: true
+  api_key: ${KVAI_API_KEY}
+
+ai:
+  timeout_ms: 30
+  backend: auto
+  model_path: ${KVAI_MODEL_PATH}
+  embedding_dimensions: 32
+
+search:
+  max_top_k: 50
+  backend: auto
+  index_path: /opt/rangeveckv/data/kvai.index
+
+storage:
+  default_collection: documents
+  backend: auto
+  read_only_mode: false
+  enable_demo_data: false
+  wal_path: /opt/rangeveckv/data/kvai.wal
+  snapshot_path: /opt/rangeveckv/data/kvai.snapshot
+  db_path: /opt/rangeveckv/data/rocksdb
+
+cluster:
+  discovery_backend: static
+  node_id: node-local
+  replication_factor: 1
+  nodes: ${KVAI_CLUSTER_NODES}
+  etcd_endpoints: http://127.0.0.1:2379
+  etcd_prefix: /rangeveckv/nodes/
+  etcd_lease_ttl_s: 10
+
+security:
+  tls_mode: ${KVAI_TLS_MODE}
+
+logging:
+  level: info
+  file_path: ""
+  file_max_size_mb: 10
+  file_max_files: 3
