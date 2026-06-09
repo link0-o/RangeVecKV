@@ -15,6 +15,7 @@ struct SemanticSearchQuery {
     std::string trace_id;
     std::string collection;
     std::string query;
+    std::string image_reference;
     std::size_t top_k = 10;
     std::vector<SearchFilter> filters;
 };

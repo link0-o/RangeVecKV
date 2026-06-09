@@ -1,4 +1,6 @@
 #include <iostream>
+#include <thread>
+#include <vector>
 
 #include "infra/cluster_routing.h"
 
@@ -33,5 +35,24 @@ int main() {
     if (!Expect(!route.primary.id.empty(), "primary node id should not be empty")) {
         return 1;
     }
+
+    std::vector<std::thread> readers;
+    for (int worker = 0; worker < 4; ++worker) {
+        readers.emplace_back([&router, worker]() {
+            for (int index = 0; index < 200; ++index) {
+                const auto concurrent_route = router.Route("documents", "doc-" + std::to_string(worker) + "-" + std::to_string(index), 2);
+                if (!concurrent_route.has_primary) {
+                    std::cerr << "concurrent route missing primary" << std::endl;
+                }
+            }
+        });
+    }
+    for (int rebuild = 0; rebuild < 20; ++rebuild) {
+        router.Rebuild(nodes.value());
+    }
+    for (auto& reader : readers) {
+        reader.join();
+    }
+
     return 0;
 }

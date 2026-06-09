@@ -31,10 +31,13 @@ int main() {
             std::ofstream output(config_path);
             output << "gateway.require_api_key: true\n";
             output << "gateway.api_key: ${KVAI_TEST_API_KEY}\n";
+            output << "ai.tokenizer_path: /models/vocab.txt\n";
+            output << "ai.max_tokens: 128\n";
             output << "cluster.nodes: ${KVAI_TEST_CLUSTER}\n";
             output << "storage.enable_demo_data: false\n";
             output << "logging.level: debug\n";
             output << "logging.file_path: /tmp/kvai.log\n";
+            output << "cluster.advertise_host: node-a\n";
             output << "cluster.etcd_endpoints: http://etcd:2379\n";
         }
 
@@ -43,14 +46,17 @@ int main() {
 
         auto config = kvai::infra::ConfigLoader::LoadFromFile(config_path.string());
         if (!Expect(config.ok(), "flat: config loading failed")) {
-            failures += 7;
+            failures += 10;
         } else {
             if (!Expect(config.value().require_api_key, "flat: api key flag not parsed")) ++failures;
             if (!Expect(config.value().api_key == "integration-secret", "flat: api key env expansion failed")) ++failures;
+            if (!Expect(config.value().tokenizer_path == "/models/vocab.txt", "flat: tokenizer_path not parsed")) ++failures;
+            if (!Expect(config.value().ai_max_tokens == 128, "flat: max_tokens not parsed")) ++failures;
             if (!Expect(config.value().cluster_nodes == "node-a@127.0.0.1:8080", "flat: cluster env expansion failed")) ++failures;
             if (!Expect(!config.value().enable_demo_data, "flat: boolean false parsing failed")) ++failures;
             if (!Expect(config.value().log_level == "debug", "flat: logging.level not parsed")) ++failures;
             if (!Expect(config.value().log_file_path == "/tmp/kvai.log", "flat: logging.file_path not parsed")) ++failures;
+            if (!Expect(config.value().advertise_host == "node-a", "flat: advertise_host not parsed")) ++failures;
             if (!Expect(config.value().etcd_endpoints == "http://etcd:2379", "flat: etcd_endpoints not parsed")) ++failures;
         }
     }
@@ -72,6 +78,8 @@ int main() {
             output << "ai:\n";
             output << "  backend: deterministic\n";
             output << "  timeout_ms: 50\n";
+            output << "  tokenizer_path: /models/vocab.txt\n";
+            output << "  max_tokens: 128\n";
             output << "  embedding_dimensions: 64\n";
             output << "search:\n";
             output << "  max_top_k: 30\n";
@@ -82,6 +90,7 @@ int main() {
             output << "  read_only_mode: true\n";
             output << "cluster:\n";
             output << "  node_id: test-node\n";
+            output << "  advertise_host: test-node\n";
             output << "  nodes: ${KVAI_TEST_CLUSTER}\n";
             output << "  etcd_endpoints: http://etcd:2379\n";
             output << "  etcd_lease_ttl_s: 20\n";
@@ -99,7 +108,7 @@ int main() {
 
         auto config = kvai::infra::ConfigLoader::LoadFromFile(config_path.string());
         if (!Expect(config.ok(), "nested: config loading failed")) {
-            failures += 16;
+            failures += 19;
         } else {
             if (!Expect(config.value().host == "0.0.0.0", "nested: host not parsed")) ++failures;
             if (!Expect(config.value().port == 9090, "nested: port not parsed")) ++failures;
@@ -108,9 +117,12 @@ int main() {
             if (!Expect(config.value().api_key == "nested-secret", "nested: api key env expansion failed")) ++failures;
             if (!Expect(config.value().rate_limit_per_second == 500, "nested: rate limit not parsed")) ++failures;
             if (!Expect(config.value().ai_timeout_ms == 50, "nested: ai timeout not parsed")) ++failures;
+            if (!Expect(config.value().tokenizer_path == "/models/vocab.txt", "nested: tokenizer path not parsed")) ++failures;
+            if (!Expect(config.value().ai_max_tokens == 128, "nested: max tokens not parsed")) ++failures;
             if (!Expect(config.value().embedding_dimensions == 64, "nested: embedding dimensions not parsed")) ++failures;
             if (!Expect(config.value().max_top_k == 30, "nested: max_top_k not parsed")) ++failures;
             if (!Expect(config.value().cluster_nodes == "node-b@10.0.0.1:9090", "nested: cluster env expansion failed")) ++failures;
+            if (!Expect(config.value().advertise_host == "test-node", "nested: advertise_host not parsed")) ++failures;
             if (!Expect(config.value().etcd_endpoints == "http://etcd:2379", "nested: etcd endpoints not parsed")) ++failures;
             if (!Expect(config.value().etcd_lease_ttl_s == 20, "nested: etcd lease ttl not parsed")) ++failures;
             if (!Expect(config.value().tls_mode == "enabled", "nested: tls_mode not parsed")) ++failures;

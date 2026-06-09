@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cctype>
+#include <exception>
 #include <sstream>
 
 namespace kvai::gateway {
@@ -23,6 +24,36 @@ std::string ToLower(std::string value) {
     return value;
 }
 
+std::vector<std::string> Tokenize(std::string value) {
+    value = ToLower(std::move(value));
+    std::vector<std::string> tokens;
+    std::string current;
+    for (unsigned char ch : value) {
+        if (std::isalnum(ch) != 0) {
+            current.push_back(static_cast<char>(ch));
+            continue;
+        }
+        if (!current.empty()) {
+            tokens.push_back(current);
+            current.clear();
+        }
+    }
+    if (!current.empty()) {
+        tokens.push_back(current);
+    }
+    return tokens;
+}
+
+bool MatchesGatewayFilters(const kvai::core::DocumentRecord& record, const std::vector<SearchFilter>& filters) {
+    for (const auto& filter : filters) {
+        const auto iterator = record.metadata.find(filter.field);
+        if (iterator == record.metadata.end() || iterator->second != filter.value) {
+            return false;
+        }
+    }
+    return true;
+}
+
 }  // namespace
 
 SemanticSearchService::SemanticSearchService(const kvai::infra::ServerConfig& config,
@@ -34,20 +65,33 @@ SemanticSearchService::SemanticSearchService(const kvai::infra::ServerConfig& co
     : config_(config), thread_pool_(thread_pool), kv_store_(kv_store), embedding_service_(embedding_service), vector_index_(vector_index), metrics_(metrics) {}
 
 kvai::infra::StatusOr<SemanticSearchResult> SemanticSearchService::Search(const SemanticSearchQuery& query) {
-    if (query.query.empty()) {
-        return kvai::infra::Status::InvalidArgument("query cannot be empty");
+    if (query.query.empty() && query.image_reference.empty()) {
+        return kvai::infra::Status::InvalidArgument("query or image_reference cannot be empty");
     }
 
     const auto effective_collection = query.collection.empty() ? config_.default_collection : query.collection;
     const auto effective_top_k = std::min<std::size_t>(std::max<std::size_t>(1, query.top_k), config_.max_top_k);
 
-    auto embedding_future = thread_pool_.Submit([this, payload = query.query]() { return embedding_service_.EmbedText(payload); });
+    auto embedding_future = thread_pool_.Submit([this, query]() {
+        if (!query.image_reference.empty()) {
+            return embedding_service_.EmbedImage(query.image_reference);
+        }
+        return embedding_service_.EmbedText(query.query);
+    });
     if (embedding_future.wait_for(std::chrono::milliseconds(config_.ai_timeout_ms)) != std::future_status::ready) {
         return KeywordFallback(query, query.trace_id, "embedding timeout triggered keyword fallback");
     }
 
-    auto embedding = embedding_future.get();
+    kvai::infra::StatusOr<kvai::ai::Embedding> embedding = kvai::infra::Status::Unavailable("embedding task did not complete");
+    try {
+        embedding = embedding_future.get();
+    } catch (const std::exception& error) {
+        return KeywordFallback(query, query.trace_id, std::string("embedding task failed: ") + error.what());
+    }
     if (!embedding.ok()) {
+        if (query.query.empty()) {
+            return embedding.status();
+        }
         return KeywordFallback(query, query.trace_id, embedding.status().ToString());
     }
 
@@ -103,23 +147,36 @@ kvai::infra::StatusOr<SemanticSearchResult> SemanticSearchService::KeywordFallba
                                                                                    const std::string& trace_id,
                                                                                    const std::string& reason) {
     const auto effective_collection = query.collection.empty() ? config_.default_collection : query.collection;
+    const auto effective_top_k = std::min<std::size_t>(std::max<std::size_t>(1, query.top_k), config_.max_top_k);
     auto all_documents = kv_store_.Range(effective_collection, "", "", 1000);
     if (!all_documents.ok()) {
         return all_documents.status();
     }
 
     const auto lowered_query = ToLower(query.query);
+    const auto query_tokens = Tokenize(query.query);
     std::vector<std::pair<double, kvai::core::DocumentRecord>> ranked;
 
     for (const auto& record : all_documents.value()) {
+        if (!MatchesGatewayFilters(record, query.filters)) {
+            continue;
+        }
+
         double score = 0.0;
-        const auto searchable = ToLower(record.title + " " + record.body);
+        const auto lowered_title = ToLower(record.title);
+        const auto lowered_body = ToLower(record.body);
+        const auto searchable = lowered_title + " " + lowered_body;
         if (searchable.find(lowered_query) != std::string::npos) {
             score += 5.0;
         }
-        for (const auto& token : query.filters) {
-            const auto iterator = record.metadata.find(token.field);
-            if (iterator != record.metadata.end() && iterator->second == token.value) {
+        for (const auto& token : query_tokens) {
+            if (token.empty()) {
+                continue;
+            }
+            if (lowered_title.find(token) != std::string::npos) {
+                score += 3.0;
+            }
+            if (lowered_body.find(token) != std::string::npos) {
                 score += 1.0;
             }
         }
@@ -128,9 +185,14 @@ kvai::infra::StatusOr<SemanticSearchResult> SemanticSearchService::KeywordFallba
         }
     }
 
-    std::sort(ranked.begin(), ranked.end(), [](const auto& lhs, const auto& rhs) { return lhs.first > rhs.first; });
-    if (ranked.size() > query.top_k) {
-        ranked.resize(query.top_k);
+    std::stable_sort(ranked.begin(), ranked.end(), [](const auto& lhs, const auto& rhs) {
+        if (lhs.first == rhs.first) {
+            return lhs.second.key < rhs.second.key;
+        }
+        return lhs.first > rhs.first;
+    });
+    if (ranked.size() > effective_top_k) {
+        ranked.resize(effective_top_k);
     }
 
     SemanticSearchResult result;

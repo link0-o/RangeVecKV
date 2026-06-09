@@ -23,6 +23,7 @@ struct ServerConfig {
     std::string search_backend = "auto";
     std::string discovery_backend = "static";
     std::string node_id = "node-local";
+    std::string advertise_host;
     std::size_t replication_factor = 1;
     bool read_only_mode = false;
     bool enable_demo_data = true;
@@ -31,6 +32,8 @@ struct ServerConfig {
     std::string tls_mode = "disabled";
     std::string cluster_nodes = "node-local@127.0.0.1:8080";
     std::string model_path = "./models/clip.onnx";
+    std::string tokenizer_path;
+    std::size_t ai_max_tokens = 256;
     std::string wal_path = "./data/kvai.wal";
     std::string snapshot_path = "./data/kvai.snapshot";
     std::string db_path = "./data/rocksdb";

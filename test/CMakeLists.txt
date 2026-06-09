@@ -17,3 +17,15 @@ add_test(NAME kvai_cluster_routing_test COMMAND kvai_cluster_routing_test)
 add_executable(kvai_config_loader_test config_loader_test.cpp)
 target_link_libraries(kvai_config_loader_test PRIVATE kvai_infra)
 add_test(NAME kvai_config_loader_test COMMAND kvai_config_loader_test)
+
+add_executable(kvai_persistence_codec_test persistence_codec_test.cpp)
+target_link_libraries(kvai_persistence_codec_test PRIVATE kvai_core kvai_infra)
+add_test(NAME kvai_persistence_codec_test COMMAND kvai_persistence_codec_test)
+
+add_executable(kvai_auth_test auth_test.cpp)
+target_link_libraries(kvai_auth_test PRIVATE kvai_gateway kvai_infra)
+add_test(NAME kvai_auth_test COMMAND kvai_auth_test)
+
+add_executable(kvai_thread_pool_test thread_pool_test.cpp)
+target_link_libraries(kvai_thread_pool_test PRIVATE kvai_infra)
+add_test(NAME kvai_thread_pool_test COMMAND kvai_thread_pool_test)

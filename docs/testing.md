@@ -2,13 +2,15 @@
 
 本文档对应当前仓库的默认本地运行方式。
 
-当前默认本地验证路径使用 fallback 后端，不要求先接通 ONNX Runtime、FAISS、RocksDB 的完整真实后端。
+当前默认本地验证路径使用 `auto` 后端选择；在没有完整生产依赖或模型文件时会自动落到 fallback 后端，不要求先接通 ONNX Runtime、FAISS、RocksDB。
 
-默认后端如下：
+注意：内部持久化已经使用生成的 Protobuf message，所以即使是 fallback 构建，也需要安装 Protobuf 编译器和开发库。
 
-- `ai.backend=deterministic`
-- `search.backend=brute_force`
-- `storage.backend=wal`
+典型 fallback 结果如下：
+
+- `ai.backend=auto` -> deterministic tokenizer embedding
+- `search.backend=auto` -> brute_force
+- `storage.backend=auto` -> wal
 - `cluster.discovery_backend=static`
 
 ## 1. 前置条件
@@ -19,6 +21,16 @@
 - `ninja`
 - `g++`
 - `ctest`
+- `protoc`
+- `libprotobuf-dev`
+- `nlohmann-json3-dev`
+
+Debian/Ubuntu 可执行：
+
+```bash
+sudo apt-get update
+sudo apt-get install -y build-essential cmake ninja-build protobuf-compiler libprotobuf-dev nlohmann-json3-dev
+```
 
 如果本机环境还没准备好，先执行：
 
@@ -43,13 +55,16 @@ export PATH="$HOME/.local/bin:$PATH"
 2. Ninja 构建
 3. `ctest --output-on-failure`
 
-构建成功后，当前测试集应通过以下 5 个测试：
+构建成功后，当前测试集应通过以下测试：
 
 - `kvai_kv_store_test`
 - `kvai_gateway_pipeline_test`
 - `kvai_http_gateway_smoke_test`
 - `kvai_cluster_routing_test`
 - `kvai_config_loader_test`
+- `kvai_persistence_codec_test`
+- `kvai_auth_test`
+- `kvai_thread_pool_test`
 
 如果你只想单独重跑测试：
 
@@ -97,6 +112,7 @@ http://127.0.0.1:8080
 - `/healthz`
 - `/v1/router`
 - `/v1/search`
+- `/v1/kv`
 - `/metrics`
 
 如果只看健康检查：
@@ -170,4 +186,4 @@ export KVAI_USE_VCPKG_TOOLCHAIN=1
 
 ### 8.3 默认本地构建为什么不直接编真实后端
 
-因为当前仓库的本地可运行基线是 fallback 路径，真实后端适配入口已经存在，但不应阻塞默认本地编译、测试和启动。
+因为当前仓库保留本地可运行 fallback 基线。真实后端适配入口已经存在，但不应阻塞默认本地编译、测试和启动。

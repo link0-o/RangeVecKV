@@ -2,6 +2,7 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "ai/embedding_service.h"
 #include "core/kv_store.h"
@@ -27,6 +28,14 @@ public:
     kvai::infra::StatusOr<SemanticSearchResult> Search(SemanticSearchQuery query);
     kvai::infra::Status UpsertDocument(kvai::core::DocumentRecord record, std::string trace_id);
     kvai::infra::Status DeleteDocument(std::string collection, std::string key, std::string trace_id);
+    kvai::infra::Status PutKvRecord(kvai::core::DocumentRecord record, std::string trace_id);
+    kvai::infra::StatusOr<kvai::core::DocumentRecord> GetKvRecord(std::string collection, std::string key, std::string trace_id) const;
+    kvai::infra::StatusOr<std::vector<kvai::core::DocumentRecord>> RangeKvRecords(std::string collection,
+                                                                                   std::string begin_key,
+                                                                                   std::string end_key,
+                                                                                   std::size_t limit) const;
+    kvai::infra::Status DeleteKvRecord(std::string collection, std::string key, std::string trace_id);
+    kvai::infra::Status ReindexDocuments(std::string collection);
     [[nodiscard]] kvai::infra::RouteDecision DescribeRoute(const std::string& collection, const std::string& key) const;
     HealthReport HealthCheck(std::string trace_id) const;
     [[nodiscard]] kvai::infra::MetricsRegistry& MutableMetrics();

@@ -93,6 +93,68 @@ std::vector<SearchFilter> ExtractFilters(const std::map<std::string, std::string
     return filters;
 }
 
+int HttpStatusFor(const kvai::infra::Status& status) {
+    switch (status.code()) {
+    case kvai::infra::StatusCode::kInvalidArgument:
+        return 400;
+    case kvai::infra::StatusCode::kNotFound:
+        return 404;
+    case kvai::infra::StatusCode::kUnavailable:
+        return 503;
+    case kvai::infra::StatusCode::kTimeout:
+        return 504;
+    case kvai::infra::StatusCode::kNotSupported:
+        return 501;
+    case kvai::infra::StatusCode::kInternal:
+        return 500;
+    case kvai::infra::StatusCode::kOk:
+        return 200;
+    }
+    return 500;
+}
+
+std::string HttpStatusText(int status_code) {
+    switch (status_code) {
+    case 200:
+        return "OK";
+    case 400:
+        return "Bad Request";
+    case 404:
+        return "Not Found";
+    case 405:
+        return "Method Not Allowed";
+    case 500:
+        return "Internal Server Error";
+    case 501:
+        return "Not Implemented";
+    case 503:
+        return "Service Unavailable";
+    case 504:
+        return "Gateway Timeout";
+    default:
+        return "Error";
+    }
+}
+
+std::size_t ParseLimit(const std::map<std::string, std::string>& params, std::size_t fallback) {
+    const auto iterator = params.find("limit");
+    if (iterator == params.end() || iterator->second.empty()) {
+        return fallback;
+    }
+    try {
+        return static_cast<std::size_t>(std::stoul(iterator->second));
+    } catch (...) {
+        return fallback;
+    }
+}
+
+std::string ErrorResponse(const kvai::infra::Status& status) {
+    nlohmann::json error_json;
+    error_json["message"] = status.ToString();
+    const auto code = HttpStatusFor(status);
+    return json::BuildHttpResponse(code, HttpStatusText(code), "application/json", error_json.dump());
+}
+
 }  // namespace
 
 HttpGatewayRuntime::HttpGatewayRuntime(kvai::infra::ServerConfig config)
@@ -282,6 +344,11 @@ void HttpGatewayRuntime::HandleClient(int client_fd) {
             if (const auto iterator = params.find("q"); iterator != params.end()) {
                 query.query = iterator->second;
             }
+            if (const auto iterator = params.find("image_path"); iterator != params.end()) {
+                query.image_reference = iterator->second;
+            } else if (const auto iterator = params.find("image_reference"); iterator != params.end()) {
+                query.image_reference = iterator->second;
+            }
             if (const auto iterator = params.find("collection"); iterator != params.end()) {
                 query.collection = iterator->second;
             }
@@ -296,6 +363,9 @@ void HttpGatewayRuntime::HandleClient(int client_fd) {
                     auto parsed = json::ParseSearchQuery(body_json, true);
                     if (parsed.ok()) {
                         query.query = parsed.value().query.empty() ? query.query : parsed.value().query;
+                        query.image_reference = parsed.value().image_reference.empty()
+                                                    ? query.image_reference
+                                                    : parsed.value().image_reference;
                         query.collection = parsed.value().collection.empty() ? query.collection : parsed.value().collection;
                         if (parsed.value().top_k != 10) {
                             query.top_k = parsed.value().top_k;
@@ -321,6 +391,66 @@ void HttpGatewayRuntime::HandleClient(int client_fd) {
         const auto collection = params.count("collection") == 0 ? std::string() : params.at("collection");
         const auto key = params.count("key") == 0 ? std::string() : params.at("key");
         response = json::BuildHttpResponse(200, "OK", "application/json", json::ToJson(server_.DescribeRoute(collection, key)).dump());
+    } else if (path == "/v1/kv") {
+        const auto params = ParseQuery(query_string);
+        if (method == "GET") {
+            const auto collection = params.count("collection") == 0 ? std::string() : params.at("collection");
+            const auto key = params.count("key") == 0 ? std::string() : params.at("key");
+            if (!key.empty()) {
+                auto record = server_.GetKvRecord(collection, key, headers.count("x-trace-id") == 0 ? std::string() : headers.at("x-trace-id"));
+                response = record.ok() ? json::BuildHttpResponse(200, "OK", "application/json", json::ToJson(record.value()).dump())
+                                       : ErrorResponse(record.status());
+            } else {
+                const auto begin_key = params.count("begin_key") == 0 ? std::string() : params.at("begin_key");
+                const auto end_key = params.count("end_key") == 0 ? std::string() : params.at("end_key");
+                auto records = server_.RangeKvRecords(collection, begin_key, end_key, ParseLimit(params, 100));
+                response = records.ok() ? json::BuildHttpResponse(200, "OK", "application/json", json::ToJson(records.value()).dump())
+                                        : ErrorResponse(records.status());
+            }
+        } else if (method == "POST" || method == "PUT") {
+            kvai::core::DocumentRecord record;
+            if (const auto iterator = headers.find("x-trace-id"); iterator != headers.end()) {
+                record.metadata["trace_id"] = iterator->second;
+            }
+            try {
+                auto body_json = nlohmann::json::parse(body, nullptr, false);
+                if (!body_json.is_discarded()) {
+                    auto parsed = json::ParseDocumentUpsert(body_json);
+                    if (parsed.ok()) {
+                        record.collection = parsed.value().collection.empty() ? record.collection : parsed.value().collection;
+                        record.key = parsed.value().key.empty() ? record.key : parsed.value().key;
+                        record.title = parsed.value().title;
+                        record.body = parsed.value().body;
+                        record.metadata.insert(parsed.value().metadata.begin(), parsed.value().metadata.end());
+                    }
+                }
+            } catch (...) {
+                // Malformed JSON — let validation return a 400 if key is missing
+            }
+            auto status = server_.PutKvRecord(record, headers.count("x-trace-id") == 0 ? std::string() : headers.at("x-trace-id"));
+            if (!status.ok()) {
+                response = ErrorResponse(status);
+            } else {
+                nlohmann::json ok_json;
+                ok_json["message"] = "kv record stored";
+                response = json::BuildHttpResponse(200, "OK", "application/json", ok_json.dump());
+            }
+        } else if (method == "DELETE") {
+            const auto collection = params.count("collection") == 0 ? std::string() : params.at("collection");
+            const auto key = params.count("key") == 0 ? std::string() : params.at("key");
+            auto status = server_.DeleteKvRecord(collection, key, headers.count("x-trace-id") == 0 ? std::string() : headers.at("x-trace-id"));
+            if (!status.ok()) {
+                response = ErrorResponse(status);
+            } else {
+                nlohmann::json ok_json;
+                ok_json["message"] = "kv record deleted";
+                response = json::BuildHttpResponse(200, "OK", "application/json", ok_json.dump());
+            }
+        } else {
+            nlohmann::json error_json;
+            error_json["message"] = "unsupported method for /v1/kv";
+            response = json::BuildHttpResponse(405, "Method Not Allowed", "application/json", error_json.dump());
+        }
     } else if (method == "POST" && path == "/v1/documents") {
         kvai::core::DocumentRecord record;
         if (const auto iterator = headers.find("x-trace-id"); iterator != headers.end()) {

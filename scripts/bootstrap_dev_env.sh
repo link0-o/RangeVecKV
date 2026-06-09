@@ -25,6 +25,7 @@ APT_PACKAGES=(
     pkg-config
     ninja-build
     make
+    nlohmann-json3-dev
     protobuf-compiler
     libprotobuf-dev
     autoconf

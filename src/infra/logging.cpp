@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <filesystem>
 #include <iostream>
 #include <mutex>
 #include <string>
@@ -9,7 +10,7 @@
 #if defined(KVAI_HAVE_SPDLOG)
 #include <spdlog/async.h>
 #include <spdlog/sinks/rotating_file_sink.h>
-#include <spdlog/sinks/stdout_color_sink.h>
+#include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/spdlog.h>
 #endif
 
@@ -130,10 +131,21 @@ void ConfigureLogger(const ServerConfig& config) {
         sinks.push_back(std::make_shared<spdlog::sinks::stdout_color_sink_mt>());
 #endif
 
-        if (!config.log_file_path.empty()) {
+        auto log_file_path = config.log_file_path;
+#ifdef NDEBUG
+        if (log_file_path.empty()) {
+            log_file_path = "./logs/rangeveckv.log";
+        }
+#endif
+
+        if (!log_file_path.empty()) {
+            const auto parent = std::filesystem::path(log_file_path).parent_path();
+            if (!parent.empty()) {
+                std::filesystem::create_directories(parent);
+            }
             const auto max_size = static_cast<std::size_t>(config.log_file_max_size_mb) * 1024ULL * 1024ULL;
             sinks.push_back(std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
-                config.log_file_path, max_size, config.log_file_max_files));
+                log_file_path, max_size, config.log_file_max_files));
         }
 
         auto logger = std::make_shared<spdlog::async_logger>(

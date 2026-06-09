@@ -23,6 +23,9 @@ public:
     [[nodiscard]] std::uint64_t http_requests() const;
     [[nodiscard]] std::string RenderPrometheus() const;
 
+    [[nodiscard]] static double CpuUtilizationRatio();
+    [[nodiscard]] static double DiskUtilizationRatio(const std::string& path);
+
 private:
     std::chrono::steady_clock::time_point started_at_;
     std::atomic<std::uint64_t> search_requests_{0};

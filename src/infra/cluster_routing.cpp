@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <mutex>
+#include <shared_mutex>
 #include <sstream>
 
 namespace kvai::infra {
@@ -56,7 +58,7 @@ ConsistentHashRouter::ConsistentHashRouter(std::string local_node_id, std::size_
     : local_node_id_(std::move(local_node_id)), virtual_nodes_(std::max<std::size_t>(1, virtual_nodes)) {}
 
 void ConsistentHashRouter::Rebuild(const std::vector<ClusterNode>& nodes) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::shared_mutex> lock(mutex_);
     nodes_ = nodes;
     ring_.clear();
     for (std::size_t node_index = 0; node_index < nodes_.size(); ++node_index) {
@@ -67,7 +69,7 @@ void ConsistentHashRouter::Rebuild(const std::vector<ClusterNode>& nodes) {
 }
 
 RouteDecision ConsistentHashRouter::Route(const std::string& collection, const std::string& key, std::size_t replication_factor) const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::shared_lock<std::shared_mutex> lock(mutex_);
     RouteDecision decision;
     if (ring_.empty() || nodes_.empty()) {
         return decision;
@@ -101,7 +103,7 @@ RouteDecision ConsistentHashRouter::Route(const std::string& collection, const s
 }
 
 std::size_t ConsistentHashRouter::NodeCount() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::shared_lock<std::shared_mutex> lock(mutex_);
     return nodes_.size();
 }
 

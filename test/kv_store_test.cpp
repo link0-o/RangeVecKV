@@ -1,7 +1,9 @@
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 
 #include "core/kv_store.h"
+#include "core/persistence_codec.h"
 
 namespace {
 
@@ -50,6 +52,32 @@ int main() {
     }
     if (!Expect(range.value().size() == 1, "range size mismatch")) {
         return 1;
+    }
+
+    const auto legacy_wal = temp_dir / "legacy.wal";
+    const auto legacy_snapshot = temp_dir / "legacy.snapshot";
+    {
+        std::ofstream output(legacy_wal);
+        output << "P|documents|legacy-1|Legacy title|Legacy body|team=search\n";
+    }
+    kvai::core::WriteAheadKvStore legacy_store(legacy_wal.string(), legacy_snapshot.string());
+    if (!Expect(legacy_store.Recover().ok(), "legacy recover failed")) {
+        return 1;
+    }
+    auto legacy_loaded = legacy_store.Get("documents", "legacy-1");
+    if (!Expect(legacy_loaded.ok(), "legacy document missing")) {
+        return 1;
+    }
+    kvai::core::DocumentRecord migrated{"documents", "legacy-2", "Migrated", "protobuf wal", {}};
+    if (!Expect(legacy_store.Put(migrated).ok(), "legacy wal migration put failed")) {
+        return 1;
+    }
+    {
+        std::ifstream input(legacy_wal, std::ios::binary);
+        std::string bytes((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+        if (!Expect(bytes.rfind(kvai::core::persistence::MagicHeader(), 0) == 0, "legacy wal was not rewritten as protobuf")) {
+            return 1;
+        }
     }
 
     std::filesystem::remove_all(temp_dir);

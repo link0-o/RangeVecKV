@@ -1,6 +1,13 @@
 #include "infra/metrics.h"
 
+#include <algorithm>
+#include <filesystem>
 #include <sstream>
+#include <thread>
+
+#if defined(__unix__) || defined(__APPLE__)
+#include <cstdlib>
+#endif
 
 namespace kvai::infra {
 
@@ -67,7 +74,34 @@ std::string MetricsRegistry::RenderPrometheus() const {
     output << "# HELP kvai_uptime_seconds Process uptime in seconds\n";
     output << "# TYPE kvai_uptime_seconds gauge\n";
     output << "kvai_uptime_seconds " << uptime_seconds << '\n';
+    output << "# HELP kvai_cpu_utilization_ratio Approximate host CPU utilization ratio from load average\n";
+    output << "# TYPE kvai_cpu_utilization_ratio gauge\n";
+    output << "kvai_cpu_utilization_ratio " << CpuUtilizationRatio() << '\n';
+    output << "# HELP kvai_disk_utilization_ratio Current working directory filesystem utilization ratio\n";
+    output << "# TYPE kvai_disk_utilization_ratio gauge\n";
+    output << "kvai_disk_utilization_ratio " << DiskUtilizationRatio(".") << '\n';
     return output.str();
+}
+
+double MetricsRegistry::CpuUtilizationRatio() {
+#if defined(__unix__) || defined(__APPLE__)
+    double loads[1] = {0.0};
+    if (getloadavg(loads, 1) == 1) {
+        const auto cores = std::max<unsigned int>(1, std::thread::hardware_concurrency());
+        return std::min(1.0, std::max(0.0, loads[0] / static_cast<double>(cores)));
+    }
+#endif
+    return 0.0;
+}
+
+double MetricsRegistry::DiskUtilizationRatio(const std::string& path) {
+    std::error_code error;
+    const auto info = std::filesystem::space(path.empty() ? "." : path, error);
+    if (error || info.capacity == 0) {
+        return 0.0;
+    }
+    const auto used = static_cast<double>(info.capacity - info.available);
+    return std::min(1.0, std::max(0.0, used / static_cast<double>(info.capacity)));
 }
 
 }  // namespace kvai::infra

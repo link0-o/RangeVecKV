@@ -23,6 +23,7 @@ int main() {
     kvai::infra::ServerConfig config;
     config.wal_path = (temp_dir / "gateway.wal").string();
     config.snapshot_path = (temp_dir / "gateway.snapshot").string();
+    config.db_path = (temp_dir / "rocksdb").string();
     config.index_path = (temp_dir / "gateway.index").string();
     config.default_collection = "documents";
     config.embedding_dimensions = 32;
@@ -62,6 +63,9 @@ int main() {
     if (!Expect(server.UpsertDocument(record, "").ok(), "upsert document failed")) {
         return 1;
     }
+    if (!Expect(server.ReindexDocuments("documents").ok(), "reindex documents failed")) {
+        return 1;
+    }
 
     auto route = server.DescribeRoute("documents", "doc-999");
     if (!Expect(route.has_primary, "route decision missing primary")) {
@@ -72,6 +76,32 @@ int main() {
     }
 
     if (!Expect(server.DeleteDocument("documents", "doc-999", "").ok(), "delete document failed")) {
+        return 1;
+    }
+
+    kvai::core::DocumentRecord kv_record{"kv", "user:1", "", "plain kv payload", {{"kind", "kv-only"}}};
+    if (!Expect(server.PutKvRecord(kv_record, "").ok(), "kv put failed")) {
+        return 1;
+    }
+    auto stored = server.GetKvRecord("kv", "user:1", "");
+    if (!Expect(stored.ok(), "kv get failed")) {
+        return 1;
+    }
+    if (!Expect(stored.value().body == "plain kv payload", "kv get returned wrong value")) {
+        return 1;
+    }
+    auto range = server.RangeKvRecords("kv", "", "", 10);
+    if (!Expect(range.ok(), "kv range failed")) {
+        return 1;
+    }
+    if (!Expect(!range.value().empty(), "kv range returned no records")) {
+        return 1;
+    }
+    if (!Expect(server.DeleteKvRecord("kv", "user:1", "").ok(), "kv delete failed")) {
+        return 1;
+    }
+    auto deleted = server.GetKvRecord("kv", "user:1", "");
+    if (!Expect(!deleted.ok(), "kv get should fail after delete")) {
         return 1;
     }
 

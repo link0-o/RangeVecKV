@@ -1,19 +1,24 @@
-version: "3.9"
-
 services:
   rangeveckv:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        DEBIAN_MIRROR: ${DEBIAN_MIRROR:-http://mirrors.tuna.tsinghua.edu.cn/debian}
+        DEBIAN_SECURITY_MIRROR: ${DEBIAN_SECURITY_MIRROR:-http://mirrors.tuna.tsinghua.edu.cn/debian-security}
+      additional_contexts:
+        vcpkg_binary_cache: ${VCPKG_BINARY_CACHE:-./docker/empty-vcpkg-cache}
     image: rangeveckv:local
     container_name: rangeveckv
     env_file:
       - .env
-    command: ["/opt/rangeveckv/bin/kvai_server", "--config", "/opt/rangeveckv/share/rangeveckv/config/server.prod.yaml", "--serve"]
+    command: ["--config", "/opt/rangeveckv/share/rangeveckv/config/server.prod.yaml", "--serve"]
     ports:
       - "8080:8080"
     volumes:
       - ./data:/opt/rangeveckv/data
+      - ./models:/opt/rangeveckv/models:ro
+      - ./images:/opt/rangeveckv/images:ro
       - ./config:/opt/rangeveckv/share/rangeveckv/config
       - ./docs:/opt/rangeveckv/share/rangeveckv/docs
     healthcheck:
@@ -23,8 +28,8 @@ services:
       retries: 3
       start_period: 10s
     depends_on:
-      - etcd
-      - minio
+      etcd:
+        condition: service_healthy
     restart: unless-stopped
 
   etcd:
@@ -44,22 +49,13 @@ services:
       - "2379:2379"
     volumes:
       - etcd-data:/etcd-data
-    restart: unless-stopped
-
-  minio:
-    image: quay.io/minio/minio:RELEASE.2026-03-14T18-26-42Z
-    container_name: rangeveckv-minio
-    command: ["server", "/data", "--console-address", ":9001"]
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
-    ports:
-      - "9000:9000"
-      - "9001:9001"
-    volumes:
-      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "etcdctl", "--endpoints=http://127.0.0.1:2379", "endpoint", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
     restart: unless-stopped
 
 volumes:
   etcd-data:
-  minio-data:

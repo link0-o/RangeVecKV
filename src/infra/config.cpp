@@ -82,7 +82,9 @@ void ExpandEnvVarsInNode(YAML::Node& node) {
         }
     } else if (node.IsSequence()) {
         for (std::size_t index = 0; index < node.size(); ++index) {
-            ExpandEnvVarsInNode(node[index]);
+            auto value = node[index];
+            ExpandEnvVarsInNode(value);
+            node[index] = value;
         }
     }
 }
@@ -168,6 +170,10 @@ ServerConfig LoadNestedConfig(const YAML::Node& root) {
         }
         config.ai_backend = ReadString(ai, "backend", config.ai_backend);
         config.model_path = ReadString(ai, "model_path", config.model_path);
+        config.tokenizer_path = ReadString(ai, "tokenizer_path", config.tokenizer_path);
+        if (ai["max_tokens"]) {
+            config.ai_max_tokens = ai["max_tokens"].as<std::size_t>();
+        }
         if (ai["embedding_dimensions"]) {
             config.embedding_dimensions = ai["embedding_dimensions"].as<std::size_t>();
         }
@@ -206,6 +212,7 @@ ServerConfig LoadNestedConfig(const YAML::Node& root) {
     if (cluster) {
         config.discovery_backend = ReadString(cluster, "discovery_backend", config.discovery_backend);
         config.node_id = ReadString(cluster, "node_id", config.node_id);
+        config.advertise_host = ReadString(cluster, "advertise_host", config.advertise_host);
         if (cluster["replication_factor"]) {
             config.replication_factor = cluster["replication_factor"].as<std::size_t>();
         }
@@ -242,7 +249,7 @@ ServerConfig LoadNestedConfig(const YAML::Node& root) {
 #endif  // KVAI_HAVE_YAML_CPP
 
 /// Load config from flat dotted-key format (legacy parser, no yaml-cpp needed).
-ServerConfig LoadFlatConfig(const std::string& path) {
+[[maybe_unused]] ServerConfig LoadFlatConfig(const std::string& path) {
     std::ifstream input(path);
     ServerConfig config;
     if (!input.is_open()) {
@@ -302,6 +309,12 @@ ServerConfig LoadFlatConfig(const std::string& path) {
     if (const auto iterator = values.find("ai.model_path"); iterator != values.end()) {
         config.model_path = iterator->second;
     }
+    if (const auto iterator = values.find("ai.tokenizer_path"); iterator != values.end()) {
+        config.tokenizer_path = iterator->second;
+    }
+    if (const auto iterator = values.find("ai.max_tokens"); iterator != values.end()) {
+        config.ai_max_tokens = std::stoul(iterator->second);
+    }
     if (const auto iterator = values.find("ai.embedding_dimensions"); iterator != values.end()) {
         config.embedding_dimensions = std::stoul(iterator->second);
     }
@@ -346,6 +359,9 @@ ServerConfig LoadFlatConfig(const std::string& path) {
     }
     if (const auto iterator = values.find("cluster.node_id"); iterator != values.end()) {
         config.node_id = iterator->second;
+    }
+    if (const auto iterator = values.find("cluster.advertise_host"); iterator != values.end()) {
+        config.advertise_host = iterator->second;
     }
     if (const auto iterator = values.find("cluster.replication_factor"); iterator != values.end()) {
         config.replication_factor = std::stoul(iterator->second);
@@ -456,6 +472,12 @@ StatusOr<ServerConfig> ConfigLoader::LoadFromFile(const std::string& path) {
         if (const auto it = values.find("ai.model_path"); it != values.end()) {
             config.model_path = it->second;
         }
+        if (const auto it = values.find("ai.tokenizer_path"); it != values.end()) {
+            config.tokenizer_path = it->second;
+        }
+        if (const auto it = values.find("ai.max_tokens"); it != values.end()) {
+            config.ai_max_tokens = std::stoul(it->second);
+        }
         if (const auto it = values.find("ai.embedding_dimensions"); it != values.end()) {
             config.embedding_dimensions = std::stoul(it->second);
         }
@@ -494,6 +516,9 @@ StatusOr<ServerConfig> ConfigLoader::LoadFromFile(const std::string& path) {
         }
         if (const auto it = values.find("cluster.node_id"); it != values.end()) {
             config.node_id = it->second;
+        }
+        if (const auto it = values.find("cluster.advertise_host"); it != values.end()) {
+            config.advertise_host = it->second;
         }
         if (const auto it = values.find("cluster.replication_factor"); it != values.end()) {
             config.replication_factor = std::stoul(it->second);

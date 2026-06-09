@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 #include <nlohmann/json.hpp>
 
@@ -17,6 +18,8 @@ namespace kvai::gateway::json {
 nlohmann::json ToJson(const HealthReport& report);
 nlohmann::json ToJson(const SemanticSearchResult& result);
 nlohmann::json ToJson(const kvai::infra::RouteDecision& route);
+nlohmann::json ToJson(const kvai::core::DocumentRecord& record);
+nlohmann::json ToJson(const std::vector<kvai::core::DocumentRecord>& records);
 
 // --- Deserialization ---
 

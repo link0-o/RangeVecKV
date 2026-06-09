@@ -28,6 +28,16 @@ std::string DefaultOpenApiSpec() {
            "      summary: Semantic search\n";
 }
 
+std::string ImageReferenceForRecord(const kvai::core::DocumentRecord& record) {
+    for (const auto* key : {"image_path", "image_reference", "image_uri"}) {
+        const auto iterator = record.metadata.find(key);
+        if (iterator != record.metadata.end() && !iterator->second.empty()) {
+            return iterator->second;
+        }
+    }
+    return {};
+}
+
 }  // namespace
 
 InProcessGatewayServer::InProcessGatewayServer(kvai::infra::ServerConfig config)
@@ -70,7 +80,7 @@ kvai::infra::Status InProcessGatewayServer::Start() {
     if (config_.discovery_backend == "etcd") {
         kvai::infra::ClusterNode local_node;
         local_node.id = config_.node_id;
-        local_node.host = config_.host;
+        local_node.host = config_.advertise_host.empty() ? config_.host : config_.advertise_host;
         local_node.port = config_.port;
         local_node.healthy = true;
 
@@ -161,7 +171,10 @@ kvai::infra::Status InProcessGatewayServer::UpsertDocument(kvai::core::DocumentR
         return kvai::infra::Status::Unavailable("document owned by remote node: " + route.primary.id + " trace_id=" + trace);
     }
 
-    auto embedding = embedding_service_->EmbedText(record.title + " " + record.body);
+    const auto image_reference = ImageReferenceForRecord(record);
+    auto embedding = image_reference.empty()
+                         ? embedding_service_->EmbedText(record.title + " " + record.body)
+                         : embedding_service_->EmbedImage(image_reference);
     if (!embedding.ok()) {
         return embedding.status();
     }
@@ -198,6 +211,128 @@ kvai::infra::Status InProcessGatewayServer::DeleteDocument(std::string collectio
     return vector_index_->Remove(collection, key);
 }
 
+kvai::infra::Status InProcessGatewayServer::PutKvRecord(kvai::core::DocumentRecord record, std::string trace_id) {
+    if (!started_) {
+        return kvai::infra::Status::Unavailable("server not started");
+    }
+    if (config_.read_only_mode) {
+        return kvai::infra::Status::Unavailable("storage is in read-only mode");
+    }
+    record.collection = record.collection.empty() ? config_.default_collection : record.collection;
+    if (record.key.empty()) {
+        return kvai::infra::Status::InvalidArgument("kv key cannot be empty");
+    }
+
+    const auto trace = TraceInjector::EnsureTraceId(trace_id);
+    const auto route = DescribeRoute(record.collection, record.key);
+    if (route.has_primary && !route.local_owner) {
+        return kvai::infra::Status::Unavailable("kv record owned by remote node: " + route.primary.id + " trace_id=" + trace);
+    }
+
+    return kv_store_->Put(record);
+}
+
+kvai::infra::StatusOr<kvai::core::DocumentRecord> InProcessGatewayServer::GetKvRecord(std::string collection,
+                                                                                       std::string key,
+                                                                                       std::string trace_id) const {
+    if (!started_) {
+        return kvai::infra::Status::Unavailable("server not started");
+    }
+    collection = collection.empty() ? config_.default_collection : std::move(collection);
+    if (key.empty()) {
+        return kvai::infra::Status::InvalidArgument("kv key cannot be empty");
+    }
+
+    const auto trace = TraceInjector::EnsureTraceId(trace_id);
+    const auto route = DescribeRoute(collection, key);
+    if (route.has_primary && !route.local_owner) {
+        return kvai::infra::Status::Unavailable("kv record owned by remote node: " + route.primary.id + " trace_id=" + trace);
+    }
+
+    return kv_store_->Get(collection, key);
+}
+
+kvai::infra::StatusOr<std::vector<kvai::core::DocumentRecord>> InProcessGatewayServer::RangeKvRecords(std::string collection,
+                                                                                                       std::string begin_key,
+                                                                                                       std::string end_key,
+                                                                                                       std::size_t limit) const {
+    if (!started_) {
+        return kvai::infra::Status::Unavailable("server not started");
+    }
+    collection = collection.empty() ? config_.default_collection : std::move(collection);
+    limit = std::min<std::size_t>(std::max<std::size_t>(1, limit), 1000);
+    return kv_store_->Range(collection, begin_key, end_key, limit);
+}
+
+kvai::infra::Status InProcessGatewayServer::DeleteKvRecord(std::string collection, std::string key, std::string trace_id) {
+    if (!started_) {
+        return kvai::infra::Status::Unavailable("server not started");
+    }
+    if (config_.read_only_mode) {
+        return kvai::infra::Status::Unavailable("storage is in read-only mode");
+    }
+    collection = collection.empty() ? config_.default_collection : std::move(collection);
+    if (key.empty()) {
+        return kvai::infra::Status::InvalidArgument("kv key cannot be empty");
+    }
+
+    const auto trace = TraceInjector::EnsureTraceId(trace_id);
+    const auto route = DescribeRoute(collection, key);
+    if (route.has_primary && !route.local_owner) {
+        return kvai::infra::Status::Unavailable("kv record owned by remote node: " + route.primary.id + " trace_id=" + trace);
+    }
+
+    return kv_store_->Delete(collection, key);
+}
+
+kvai::infra::Status InProcessGatewayServer::ReindexDocuments(std::string collection) {
+    if (!started_) {
+        return kvai::infra::Status::Unavailable("server not started");
+    }
+    collection = collection.empty() ? config_.default_collection : std::move(collection);
+
+    constexpr std::size_t kPageSize = 1000;
+    std::string begin_key;
+    std::size_t indexed_count = 0;
+    while (true) {
+        auto records = kv_store_->Range(collection, begin_key, "", kPageSize);
+        if (!records.ok()) {
+            return records.status();
+        }
+        if (records.value().empty()) {
+            break;
+        }
+
+        for (const auto& record : records.value()) {
+            const auto image_reference = ImageReferenceForRecord(record);
+            auto embedding = image_reference.empty()
+                                 ? embedding_service_->EmbedText(record.title + " " + record.body)
+                                 : embedding_service_->EmbedImage(image_reference);
+            if (!embedding.ok()) {
+                return embedding.status();
+            }
+            auto status = vector_index_->Upsert(record, embedding.value().values);
+            if (!status.ok()) {
+                return status;
+            }
+            ++indexed_count;
+        }
+
+        if (records.value().size() < kPageSize) {
+            break;
+        }
+        begin_key = records.value().back().key;
+        begin_key.push_back('\0');
+    }
+
+    auto status = vector_index_->FlushSnapshot();
+    if (status.ok()) {
+        kvai::infra::log::Info("gateway", "reindexed collection",
+                               {{"collection", collection}, {"document_count", std::to_string(indexed_count)}});
+    }
+    return status;
+}
+
 kvai::infra::RouteDecision InProcessGatewayServer::DescribeRoute(const std::string& collection, const std::string& key) const {
     return router_.Route(collection.empty() ? config_.default_collection : collection, key, config_.replication_factor);
 }
@@ -209,6 +344,10 @@ HealthReport InProcessGatewayServer::HealthCheck(std::string trace_id) const {
     report.details.emplace("cluster_node_count", std::to_string(router_.NodeCount()));
     report.details.emplace("read_only_mode", config_.read_only_mode ? "true" : "false");
     report.details.emplace("tls_mode", config_.tls_mode);
+    report.details.emplace("cpu_utilization_ratio", std::to_string(kvai::infra::MetricsRegistry::CpuUtilizationRatio()));
+    report.details.emplace("disk_utilization_ratio", std::to_string(kvai::infra::MetricsRegistry::DiskUtilizationRatio(config_.wal_path)));
+    report.details.emplace("thread_pool_workers", std::to_string(thread_pool_.WorkerCount()));
+    report.details.emplace("thread_pool_pending_tasks", std::to_string(thread_pool_.PendingTasks()));
     return report;
 }
 

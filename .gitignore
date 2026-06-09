@@ -6,6 +6,9 @@ vcpkg_installed/
 .claude/
 
 data/
+models/
+images/
+logs/
 
 *.tar.gz
 

@@ -25,6 +25,9 @@
       "version>=": "0.15.4"
     },
     {
+      "name": "tbb"
+    },
+    {
       "name": "spdlog",
       "version>=": "1.17.0"
     },

@@ -1,7 +1,8 @@
 model:
-  name: deterministic-fallback
-  backend: local-hash
-  embedding_dimensions: 32
+  name: chinese-clip-vit-base-patch16
+  backend: onnxruntime
+  embedding_dimensions: 512
   batch_size: 64
   device: cpu
   onnx_path: ${KVAI_MODEL_PATH}
+  tokenizer_path: ${KVAI_TOKENIZER_PATH}

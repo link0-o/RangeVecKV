@@ -14,6 +14,8 @@
 #include "infra/logging.h"
 
 #if defined(KVAI_HAVE_BRPC)
+#include <brpc/controller.h>
+
 #include "gateway/brpc_runtime.h"
 #else
 #include "gateway/http_runtime.h"
@@ -22,7 +24,7 @@
 namespace {
 
 void PrintUsage() {
-    std::cout << "Usage: kvai_server --config <path> [--query <text>] [--top-k <n>] [--collection <name>] [--healthcheck] [--dump-openapi] [--serve]\n";
+    std::cout << "Usage: kvai_server --config <path> [--query <text>] [--top-k <n>] [--collection <name>] [--healthcheck] [--dump-openapi] [--reindex] [--serve]\n";
 }
 
 std::atomic<bool> g_stop_requested{false};
@@ -40,6 +42,7 @@ int main(int argc, char** argv) {
     std::size_t top_k = 5;
     bool healthcheck = false;
     bool dump_openapi = false;
+    bool reindex = false;
     bool serve = false;
 
     for (int index = 1; index < argc; ++index) {
@@ -56,6 +59,8 @@ int main(int argc, char** argv) {
             healthcheck = true;
         } else if (argument == "--dump-openapi") {
             dump_openapi = true;
+        } else if (argument == "--reindex") {
+            reindex = true;
         } else if (argument == "--serve") {
             serve = true;
         } else {
@@ -71,6 +76,50 @@ int main(int argc, char** argv) {
     }
 
     kvai::infra::log::ConfigureLogger(config.value());
+
+    const bool has_one_shot_action = healthcheck || dump_openapi || reindex || !query_text.empty();
+    if (!serve && !has_one_shot_action) {
+        serve = true;
+    }
+
+    if (serve && !has_one_shot_action) {
+        std::signal(SIGTERM, HandleSignal);
+
+#if defined(KVAI_HAVE_BRPC)
+        kvai::gateway::BrpcGatewayRuntime runtime(config.value());
+#else
+        std::signal(SIGINT, HandleSignal);
+        kvai::gateway::HttpGatewayRuntime runtime(config.value());
+#endif
+        auto runtime_status = runtime.Start();
+        if (!runtime_status.ok()) {
+            std::cerr << runtime_status.ToString() << std::endl;
+            return EXIT_FAILURE;
+        }
+
+        std::cout << "kvai_server serving on http://" << config.value().host << ':' << config.value().port << "\n";
+
+#if defined(KVAI_HAVE_BRPC)
+        std::atomic<bool> wait_finished{false};
+        std::thread termination_watcher([&wait_finished]() {
+            while (!g_stop_requested.load() && !wait_finished.load()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+            if (g_stop_requested.load() && !wait_finished.load()) {
+                brpc::AskToQuit();
+            }
+        });
+        runtime.Wait();
+        wait_finished.store(true);
+        termination_watcher.join();
+#else
+        while (!g_stop_requested.load()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+#endif
+        runtime.Stop();
+        return EXIT_SUCCESS;
+    }
 
     kvai::gateway::InProcessGatewayServer server(config.value());
     auto start_status = server.Start();
@@ -92,56 +141,31 @@ int main(int argc, char** argv) {
         return EXIT_SUCCESS;
     }
 
-    if (!query_text.empty()) {
-        kvai::gateway::SemanticSearchQuery query;
-        query.collection = collection;
-        query.query = query_text;
-        query.top_k = top_k;
-
-        auto result = server.Search(query);
-        if (!result.ok()) {
-            std::cerr << result.status().ToString() << std::endl;
+    if (reindex) {
+        auto status = server.ReindexDocuments(collection);
+        if (!status.ok()) {
+            std::cerr << status.ToString() << std::endl;
             server.Stop();
             return EXIT_FAILURE;
         }
-
-        std::cout << kvai::gateway::json::ToJson(result.value()).dump(2) << std::endl;
+        std::cout << "reindex completed" << std::endl;
         server.Stop();
         return EXIT_SUCCESS;
     }
 
+    kvai::gateway::SemanticSearchQuery query;
+    query.collection = collection;
+    query.query = query_text;
+    query.top_k = top_k;
+
+    auto result = server.Search(query);
+    if (!result.ok()) {
+        std::cerr << result.status().ToString() << std::endl;
+        server.Stop();
+        return EXIT_FAILURE;
+    }
+
+    std::cout << kvai::gateway::json::ToJson(result.value()).dump(2) << std::endl;
     server.Stop();
-
-    if (!serve && query_text.empty() && !healthcheck && !dump_openapi) {
-        serve = true;
-    }
-
-    if (serve) {
-        std::signal(SIGINT, HandleSignal);
-        std::signal(SIGTERM, HandleSignal);
-
-#if defined(KVAI_HAVE_BRPC)
-        kvai::gateway::BrpcGatewayRuntime runtime(config.value());
-#else
-        kvai::gateway::HttpGatewayRuntime runtime(config.value());
-#endif
-        auto runtime_status = runtime.Start();
-        if (!runtime_status.ok()) {
-            std::cerr << runtime_status.ToString() << std::endl;
-            return EXIT_FAILURE;
-        }
-
-        std::cout << "kvai_server serving on http://" << config.value().host << ':' << config.value().port << "\n";
-
-#if defined(KVAI_HAVE_BRPC)
-        runtime.Wait();
-#else
-        while (!g_stop_requested.load()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        }
-#endif
-        runtime.Stop();
-    }
-
     return EXIT_SUCCESS;
 }

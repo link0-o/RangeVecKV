@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package kvai.v1;
 
+option cc_generic_services = true;
+
 message SearchFilter {
   string field = 1;
   string value = 2;
@@ -28,6 +30,32 @@ message SearchHit {
   string snippet = 3;
   double score = 4;
   map<string, string> metadata = 5;
+}
+
+message DocumentRecord {
+  string collection = 1;
+  string key = 2;
+  string title = 3;
+  string body = 4;
+  map<string, string> metadata = 5;
+}
+
+enum WalOperation {
+  WAL_OPERATION_UNSPECIFIED = 0;
+  WAL_OPERATION_PUT = 1;
+  WAL_OPERATION_DELETE = 2;
+}
+
+message WalEntry {
+  WalOperation operation = 1;
+  DocumentRecord record = 2;
+  string collection = 3;
+  string key = 4;
+}
+
+message VectorEntry {
+  DocumentRecord record = 1;
+  repeated float vector = 2;
 }
 
 message HealthCheckRequest {
@@ -61,6 +89,8 @@ service GatewayService {
   rpc Search(HttpRequest) returns (HttpResponse);
   // GET /v1/router
   rpc Router(HttpRequest) returns (HttpResponse);
+  // GET/POST/PUT/DELETE /v1/kv
+  rpc Kv(HttpRequest) returns (HttpResponse);
   // POST /v1/documents
   rpc UpsertDocument(HttpRequest) returns (HttpResponse);
   // DELETE /v1/documents

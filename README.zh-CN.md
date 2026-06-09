@@ -1,0 +1,138 @@
+# RangeVecKV 中文说明
+
+RangeVecKV 是一个 C++17 实现的分布式 KV + 语义检索引擎。项目同时保留两条数据路径：
+
+- 纯 KV 路径：直接读写 RocksDB 或本地 WAL/snapshot fallback，不触发 AI embedding 和向量索引。
+- 语义检索路径：文档写入时生成向量，查询时使用文本或图片 embedding 做向量检索。
+
+当前生产化目标是用一套 C++ 服务串起 BRPC、Protobuf、RocksDB、FAISS、ONNX Runtime、etcd、spdlog、yaml-cpp、oneTBB 和 Docker Compose。
+
+## 核心能力
+
+- `/v1/kv`：纯 KV 增删查，绕过 AI 和向量索引。
+- `/v1/documents`：语义文档写入和删除，同时维护 KV 与向量索引。
+- `/v1/search`：中文文本检索、图片检索、跨模态检索。
+- `/v1/router`：根据 collection/key 查看一致性哈希路由归属。
+- `/healthz`、`/metrics`、`/openapi.yaml`：健康检查、Prometheus 指标、OpenAPI 文档。
+
+## 本地快速验证
+
+默认本地构建使用 fallback 后端，不要求先安装 ONNX Runtime、FAISS、RocksDB、etcd 等完整生产依赖。因为内部持久化已经切到生成的 Protobuf，所以本地仍需要基础构建工具、Protobuf 和 nlohmann-json。
+
+Debian/Ubuntu 可先安装：
+
+```bash
+sudo apt-get update
+sudo apt-get install -y build-essential cmake ninja-build protobuf-compiler libprotobuf-dev nlohmann-json3-dev
+```
+
+也可以直接使用项目脚本安装本地工具链：
+
+```bash
+./scripts/bootstrap_dev_env.sh
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+然后构建、启动：
+
+```bash
+./scripts/build_local.sh
+./scripts/run_local_service.sh
+```
+
+另开终端执行：
+
+```bash
+./scripts/http_smoke.sh http://127.0.0.1:8080
+```
+
+如果要显式尝试完整 vcpkg 后端：
+
+```bash
+export KVAI_USE_VCPKG_TOOLCHAIN=1
+./scripts/build_local.sh
+```
+
+## 生产 Compose
+
+先下载固定版本的 Chinese-CLIP ONNX 模型：
+
+```bash
+./scripts/download_ai_model.sh
+docker compose up --build -d
+```
+
+生产配置使用 `.env` 注入 API key、模型路径、tokenizer 路径、etcd 地址等变量。参考 `.env.example`。
+
+图片检索时，把图片放到宿主机 `images/` 目录，容器内路径使用：
+
+```text
+/opt/rangeveckv/images/example.jpg
+```
+
+## API 示例
+
+纯 KV 写入：
+
+```bash
+curl -X POST http://127.0.0.1:8080/v1/kv \
+  -H "x-api-key: <api-key>" \
+  -H "Content-Type: application/json" \
+  -d '{"collection":"kv","key":"user:1","value":"plain kv value"}'
+```
+
+纯 KV 查询：
+
+```bash
+curl "http://127.0.0.1:8080/v1/kv?collection=kv&key=user:1" \
+  -H "x-api-key: <api-key>"
+```
+
+语义文档写入：
+
+```bash
+curl -X POST http://127.0.0.1:8080/v1/documents \
+  -H "x-api-key: <api-key>" \
+  -H "Content-Type: application/json" \
+  -d '{"collection":"documents","key":"doc-1","title":"中文向量检索","body":"RangeVecKV 支持中文语义搜索。"}'
+```
+
+中文语义搜索：
+
+```bash
+curl "http://127.0.0.1:8080/v1/search?q=中文语义搜索&top_k=5" \
+  -H "x-api-key: <api-key>"
+```
+
+图片搜索：
+
+```bash
+curl -X POST http://127.0.0.1:8080/v1/search \
+  -H "x-api-key: <api-key>" \
+  -H "Content-Type: application/json" \
+  -d '{"image_path":"/opt/rangeveckv/images/example.jpg","top_k":5}'
+```
+
+## 持久化格式
+
+内部持久化使用生成的 Protobuf message：
+
+- `DocumentRecord`
+- `WalEntry`
+- `VectorEntry`
+
+WAL、snapshot、brute-force vector index snapshot、FAISS metadata 都使用 framed Protobuf records。HTTP API 仍然使用 JSON。
+
+## 性能口径
+
+项目里要区分三类 QPS：
+
+- RocksDB 引擎直测：绕过 HTTP 和 JSON，能反映存储引擎能力。
+- `/v1/kv` HTTP QPS：包含 HTTP、JSON、路由、Protobuf 编解码、RocksDB。
+- `/v1/search` 语义检索 QPS：额外包含 ONNXRuntime 模型推理和向量检索。
+
+当前语义搜索的主要瓶颈在 Chinese-CLIP CPU 推理，不在 RocksDB。
+
+## 许可证
+
+本项目使用 MIT License，详见 [LICENSE](LICENSE)。

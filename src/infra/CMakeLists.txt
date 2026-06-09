@@ -13,26 +13,19 @@ if(KVAI_ENABLE_OPTIONAL_BACKENDS)
     find_package(spdlog CONFIG QUIET)
 endif()
 
-if(TARGET spdlog::spdlog)
-    target_compile_definitions(kvai_infra PUBLIC KVAI_HAVE_SPDLOG=1)
-endif()
-
 # yaml-cpp: proper YAML parsing with nested format support (fallback flat parser when unavailable)
 if(KVAI_ENABLE_OPTIONAL_BACKENDS)
     find_package(yaml-cpp CONFIG QUIET)
 endif()
 
-if(TARGET yaml-cpp)
-    target_compile_definitions(kvai_infra PUBLIC KVAI_HAVE_YAML_CPP=1)
-endif()
-
 # etcd-cpp-apiv3: dynamic service discovery (fallback stub compiled when unavailable)
 if(KVAI_ENABLE_OPTIONAL_BACKENDS)
-    find_package(etcd-cpp-apiv3 CONFIG QUIET)
+    find_package(etcd-cpp-api CONFIG QUIET)
 endif()
 
-if(TARGET etcd-cpp-api)
-    target_compile_definitions(kvai_infra PUBLIC KVAI_HAVE_ETCD=1)
+# oneTBB: optional production-grade task runtime for ThreadPool
+if(KVAI_ENABLE_OPTIONAL_BACKENDS)
+    find_package(TBB CONFIG QUIET)
 endif()
 
 add_library(kvai_infra ${KVAI_INFRA_SOURCES})
@@ -43,13 +36,24 @@ target_link_libraries(kvai_infra PUBLIC kvai_project_options kvai_project_warnin
 
 # Link conditional libraries
 if(TARGET spdlog::spdlog)
+    target_compile_definitions(kvai_infra PUBLIC KVAI_HAVE_SPDLOG=1)
     target_link_libraries(kvai_infra PUBLIC spdlog::spdlog)
 endif()
 
-if(TARGET yaml-cpp)
+if(TARGET yaml-cpp::yaml-cpp)
+    target_compile_definitions(kvai_infra PUBLIC KVAI_HAVE_YAML_CPP=1)
+    target_link_libraries(kvai_infra PUBLIC yaml-cpp::yaml-cpp)
+elseif(TARGET yaml-cpp)
+    target_compile_definitions(kvai_infra PUBLIC KVAI_HAVE_YAML_CPP=1)
     target_link_libraries(kvai_infra PUBLIC yaml-cpp)
 endif()
 
 if(TARGET etcd-cpp-api)
+    target_compile_definitions(kvai_infra PUBLIC KVAI_HAVE_ETCD=1)
     target_link_libraries(kvai_infra PRIVATE etcd-cpp-api)
+endif()
+
+if(TARGET TBB::tbb)
+    target_compile_definitions(kvai_infra PUBLIC KVAI_HAVE_TBB=1)
+    target_link_libraries(kvai_infra PRIVATE TBB::tbb)
 endif()

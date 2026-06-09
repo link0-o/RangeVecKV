@@ -59,6 +59,28 @@ nlohmann::json ToJson(const kvai::infra::RouteDecision& route) {
     return j;
 }
 
+nlohmann::json ToJson(const kvai::core::DocumentRecord& record) {
+    nlohmann::json j;
+    j["collection"] = record.collection;
+    j["key"] = record.key;
+    j["title"] = record.title;
+    j["body"] = record.body;
+    j["value"] = record.body;
+    j["metadata"] = record.metadata;
+    return j;
+}
+
+nlohmann::json ToJson(const std::vector<kvai::core::DocumentRecord>& records) {
+    nlohmann::json items = nlohmann::json::array();
+    for (const auto& record : records) {
+        items.push_back(ToJson(record));
+    }
+
+    nlohmann::json j;
+    j["items"] = std::move(items);
+    return j;
+}
+
 // --- Deserialization ---
 
 kvai::infra::StatusOr<SemanticSearchQuery> ParseSearchQuery(const nlohmann::json& j, bool is_post) {
@@ -67,6 +89,11 @@ kvai::infra::StatusOr<SemanticSearchQuery> ParseSearchQuery(const nlohmann::json
     if (is_post) {
         if (j.contains("query") && j["query"].is_string()) {
             query.query = j["query"].get<std::string>();
+        }
+        if (j.contains("image_path") && j["image_path"].is_string()) {
+            query.image_reference = j["image_path"].get<std::string>();
+        } else if (j.contains("image_reference") && j["image_reference"].is_string()) {
+            query.image_reference = j["image_reference"].get<std::string>();
         }
         if (j.contains("collection") && j["collection"].is_string()) {
             query.collection = j["collection"].get<std::string>();
@@ -103,6 +130,8 @@ kvai::infra::StatusOr<kvai::core::DocumentRecord> ParseDocumentUpsert(const nloh
     }
     if (j.contains("body") && j["body"].is_string()) {
         record.body = j["body"].get<std::string>();
+    } else if (j.contains("value") && j["value"].is_string()) {
+        record.body = j["value"].get<std::string>();
     }
     if (j.contains("metadata") && j["metadata"].is_object()) {
         for (auto& [key, value] : j["metadata"].items()) {

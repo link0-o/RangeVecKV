@@ -91,6 +91,131 @@ paths:
           description: Missing or invalid API key
         '503':
           description: Routed to a remote node or service unavailable
+  /v1/kv:
+    get:
+      summary: Pure KV lookup or range scan without embedding or vector index access
+      parameters:
+        - in: query
+          name: collection
+          schema:
+            type: string
+        - in: query
+          name: key
+          schema:
+            type: string
+          description: When provided, returns exactly one record by key.
+        - in: query
+          name: begin_key
+          schema:
+            type: string
+          description: Range scan lower bound used when key is omitted.
+        - in: query
+          name: end_key
+          schema:
+            type: string
+          description: Range scan exclusive upper bound used when key is omitted.
+        - in: query
+          name: limit
+          schema:
+            type: integer
+          description: Range result limit, capped by the server at 1000.
+      responses:
+        '200':
+          description: KV record or range result
+        '400':
+          description: Invalid key or request
+        '401':
+          description: Missing or invalid API key
+        '404':
+          description: KV record not found
+        '503':
+          description: Routed to a remote node or service unavailable
+    post:
+      summary: Store a pure KV record without embedding or vector index update
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                collection:
+                  type: string
+                key:
+                  type: string
+                value:
+                  type: string
+                  description: Alias stored as the record body.
+                title:
+                  type: string
+                body:
+                  type: string
+                metadata:
+                  type: object
+                  additionalProperties:
+                    type: string
+      responses:
+        '200':
+          description: KV record stored
+        '400':
+          description: Missing key or invalid request
+        '401':
+          description: Missing or invalid API key
+        '503':
+          description: Routed to a remote node or service unavailable
+    put:
+      summary: Store a pure KV record without embedding or vector index update
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                collection:
+                  type: string
+                key:
+                  type: string
+                value:
+                  type: string
+                title:
+                  type: string
+                body:
+                  type: string
+                metadata:
+                  type: object
+                  additionalProperties:
+                    type: string
+      responses:
+        '200':
+          description: KV record stored
+        '400':
+          description: Missing key or invalid request
+        '401':
+          description: Missing or invalid API key
+        '503':
+          description: Routed to a remote node or service unavailable
+    delete:
+      summary: Delete a pure KV record without vector index update
+      parameters:
+        - in: query
+          name: collection
+          schema:
+            type: string
+        - in: query
+          name: key
+          schema:
+            type: string
+            required: true
+      responses:
+        '200':
+          description: KV record deleted
+        '400':
+          description: Missing key or invalid request
+        '401':
+          description: Missing or invalid API key
+        '503':
+          description: Routed to a remote node or service unavailable
   /v1/search:
     get:
       summary: Semantic search with query parameters
@@ -99,7 +224,11 @@ paths:
           name: q
           schema:
             type: string
-          required: true
+        - in: query
+          name: image_path
+          schema:
+            type: string
+          description: Local JPEG/PNG path mounted into the service container for image vector search
         - in: query
           name: collection
           schema:
@@ -130,6 +259,12 @@ paths:
               properties:
                 query:
                   type: string
+                image_path:
+                  type: string
+                  description: Local JPEG/PNG path mounted into the service container for image vector search
+                image_reference:
+                  type: string
+                  description: Alias for image_path
                 collection:
                   type: string
                 top_k:

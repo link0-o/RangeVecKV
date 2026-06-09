@@ -1,7 +1,14 @@
 .git
+.env
+_CPack_Packages
 build
 dist
 data
+logs
+models
+images
+vcpkg_installed
+rangeveckv-*.tar.gz
 .DS_Store
 *.swp
 *.tmp

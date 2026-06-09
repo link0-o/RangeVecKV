@@ -34,13 +34,14 @@ kvai::infra::Status BrpcGatewayRuntime::Start() {
     http_service_ = new BrpcHttpServiceImpl(server_, authenticator_);
     if (brpc_server_->AddService(http_service_,
                                   brpc::SERVER_OWNS_SERVICE,
-                                  "/healthz -> Healthz\n"
-                                  "/metrics -> Metrics\n"
-                                  "/openapi.yaml -> OpenApi\n"
-                                  "/v1/search -> Search\n"
-                                  "/v1/router -> Router\n"
-                                  "/v1/documents -> UpsertDocument\n"
-                                  "/v1/documents/delete -> DeleteDocument") != 0) {
+                                  "/healthz => Healthz,"
+                                  "/metrics => Metrics,"
+                                  "/openapi.yaml => OpenApi,"
+                                  "/v1/search => Search,"
+                                  "/v1/router => Router,"
+                                  "/v1/kv => Kv,"
+                                  "/v1/documents => UpsertDocument,"
+                                  "/v1/documents/delete => DeleteDocument") != 0) {
         return kvai::infra::Status::Internal("failed to add BRPC HTTP service");
     }
 

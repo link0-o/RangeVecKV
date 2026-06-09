@@ -13,6 +13,7 @@ if(KVAI_ENABLE_OPTIONAL_BACKENDS)
 endif()
 
 target_include_directories(kvai_ai PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_include_directories(kvai_ai SYSTEM PRIVATE ${CMAKE_SOURCE_DIR}/third_party/stb)
 target_link_libraries(kvai_ai PUBLIC kvai_infra kvai_project_options kvai_project_warnings)
 
 if(TARGET onnxruntime::onnxruntime)

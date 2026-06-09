@@ -4,6 +4,8 @@
 #include <fstream>
 #include <sstream>
 
+#include "core/persistence_codec.h"
+
 #if defined(KVAI_HAVE_ROCKSDB)
 #include <rocksdb/db.h>
 #include <rocksdb/options.h>
@@ -13,33 +15,6 @@
 namespace kvai::core {
 
 namespace {
-
-std::string Escape(std::string value) {
-    std::string escaped;
-    escaped.reserve(value.size());
-
-    for (char ch : value) {
-        switch (ch) {
-        case '\\':
-        case '|':
-        case ';':
-        case '=':
-        case '\n':
-            escaped.push_back('\\');
-            if (ch == '\n') {
-                escaped.push_back('n');
-            } else {
-                escaped.push_back(ch);
-            }
-            break;
-        default:
-            escaped.push_back(ch);
-            break;
-        }
-    }
-
-    return escaped;
-}
 
 std::string Unescape(const std::string& value) {
     std::string result;
@@ -89,19 +64,6 @@ std::vector<std::string> SplitEscaped(const std::string& value, char delimiter) 
     return parts;
 }
 
-std::string SerializeMetadata(const std::map<std::string, std::string>& metadata) {
-    std::ostringstream stream;
-    bool first = true;
-    for (const auto& [key, value] : metadata) {
-        if (!first) {
-            stream << ';';
-        }
-        first = false;
-        stream << Escape(key) << '=' << Escape(value);
-    }
-    return stream.str();
-}
-
 std::map<std::string, std::string> DeserializeMetadata(const std::string& encoded) {
     std::map<std::string, std::string> metadata;
     if (encoded.empty()) {
@@ -119,13 +81,6 @@ std::map<std::string, std::string> DeserializeMetadata(const std::string& encode
     return metadata;
 }
 
-std::string SerializeRecord(const DocumentRecord& record) {
-    std::ostringstream stream;
-    stream << Escape(record.collection) << '|' << Escape(record.key) << '|' << Escape(record.title) << '|' << Escape(record.body) << '|'
-           << SerializeMetadata(record.metadata);
-    return stream.str();
-}
-
 kvai::infra::StatusOr<DocumentRecord> DeserializeRecord(const std::string& encoded) {
     const auto parts = SplitEscaped(encoded, '|');
     if (parts.size() != 5) {
@@ -139,6 +94,36 @@ kvai::infra::StatusOr<DocumentRecord> DeserializeRecord(const std::string& encod
     record.body = Unescape(parts[3]);
     record.metadata = DeserializeMetadata(parts[4]);
     return record;
+}
+
+[[maybe_unused]] kvai::infra::StatusOr<DocumentRecord> DecodeStoredRecord(const std::string& encoded) {
+    auto decoded = persistence::DecodeDocumentRecord(encoded);
+    if (decoded.ok() && !decoded.value().collection.empty() && !decoded.value().key.empty()) {
+        return decoded;
+    }
+    return DeserializeRecord(encoded);
+}
+
+kvai::infra::StatusOr<std::string> ReadWholeFile(const std::string& path) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input.is_open()) {
+        return kvai::infra::Status::NotFound("file not found: " + path);
+    }
+    std::ostringstream buffer;
+    buffer << input.rdbuf();
+    return buffer.str();
+}
+
+bool HasPersistenceMagic(const std::string& bytes) {
+    return bytes.rfind(persistence::MagicHeader(), 0) == 0;
+}
+
+bool ShouldRewriteLegacyWal(const std::string& path) {
+    if (!std::filesystem::exists(path) || std::filesystem::file_size(path) == 0) {
+        return false;
+    }
+    auto bytes = ReadWholeFile(path);
+    return bytes.ok() && !HasPersistenceMagic(bytes.value());
 }
 
 kvai::infra::Status EnsureParentDirectory(const std::string& path) {
@@ -163,18 +148,49 @@ class RocksDbKvStore final : public KvStore {
 public:
     explicit RocksDbKvStore(std::string db_path) : db_path_(std::move(db_path)) {}
 
+    ~RocksDbKvStore() override {
+        if (db_ == nullptr) {
+            return;
+        }
+        for (const auto& [name, handle] : column_families_) {
+            (void)name;
+            db_->DestroyColumnFamilyHandle(handle);
+        }
+    }
+
     kvai::infra::Status Recover() override {
+        const auto directory_status = EnsureParentDirectory(db_path_);
+        if (!directory_status.ok()) {
+            return directory_status;
+        }
+
         rocksdb::Options options;
         options.create_if_missing = true;
         options.create_missing_column_families = true;
 
-        // Open with default column family
-        rocksdb::DB* raw_db = nullptr;
-        const auto status = rocksdb::DB::Open(options, db_path_, &raw_db);
+        std::vector<std::string> names;
+        const auto list_status = rocksdb::DB::ListColumnFamilies(options, db_path_, &names);
+        if (!list_status.ok()) {
+            names = {rocksdb::kDefaultColumnFamilyName};
+        }
+
+        std::vector<rocksdb::ColumnFamilyDescriptor> descriptors;
+        descriptors.reserve(names.size());
+        for (const auto& name : names) {
+            descriptors.emplace_back(name, rocksdb::ColumnFamilyOptions());
+        }
+
+        std::vector<rocksdb::ColumnFamilyHandle*> handles;
+        std::unique_ptr<rocksdb::DB> db;
+        const auto status = rocksdb::DB::Open(options, db_path_, descriptors, &handles, &db);
         if (!status.ok()) {
             return kvai::infra::Status::Internal("failed to open rocksdb: " + status.ToString());
         }
-        db_.reset(raw_db);
+
+        db_ = std::move(db);
+        for (std::size_t index = 0; index < names.size(); ++index) {
+            column_families_[names[index]] = handles[index];
+        }
         return kvai::infra::Status::Ok();
     }
 
@@ -186,7 +202,7 @@ public:
         if (cf == nullptr) {
             return kvai::infra::Status::Internal("failed to get column family for collection: " + record.collection);
         }
-        const auto status = db_->Put(rocksdb::WriteOptions(), cf, record.key, SerializeRecord(record));
+        const auto status = db_->Put(rocksdb::WriteOptions(), cf, record.key, persistence::EncodeDocumentRecord(record));
         return status.ok() ? kvai::infra::Status::Ok() : kvai::infra::Status::Internal("rocksdb put failed: " + status.ToString());
     }
 
@@ -200,7 +216,7 @@ public:
             if (cf == nullptr) {
                 return kvai::infra::Status::Internal("failed to get column family for collection: " + record.collection);
             }
-            batch.Put(cf, record.key, SerializeRecord(record));
+            batch.Put(cf, record.key, persistence::EncodeDocumentRecord(record));
         }
         const auto status = db_->Write(rocksdb::WriteOptions(), &batch);
         return status.ok() ? kvai::infra::Status::Ok() : kvai::infra::Status::Internal("rocksdb batch put failed: " + status.ToString());
@@ -234,7 +250,7 @@ public:
         if (!status.ok()) {
             return kvai::infra::Status::Internal("rocksdb get failed: " + status.ToString());
         }
-        return DeserializeRecord(value);
+        return DecodeStoredRecord(value);
     }
 
     kvai::infra::StatusOr<std::vector<DocumentRecord>> MultiGet(const std::vector<SearchReference>& references) const override {
@@ -262,19 +278,19 @@ public:
 
             // Build keys and handles for RocksDB MultiGet
             std::vector<rocksdb::Slice> keys;
-            std::vector<std::string> values(indices.size());
-            std::vector<rocksdb::Status> statuses(indices.size());
             keys.reserve(indices.size());
 
             for (const auto index : indices) {
                 keys.emplace_back(references[index].key);
             }
 
-            db_->MultiGet(rocksdb::ReadOptions(), cf, static_cast<int>(keys.size()), keys.data(), values.data(), statuses.data());
+            std::vector<rocksdb::ColumnFamilyHandle*> handles(keys.size(), cf);
+            std::vector<std::string> values;
+            const auto statuses = db_->MultiGet(rocksdb::ReadOptions(), handles, keys, &values);
 
             for (std::size_t index = 0; index < indices.size(); ++index) {
                 if (statuses[index].ok()) {
-                    auto record = DeserializeRecord(values[index]);
+                    auto record = DecodeStoredRecord(values[index]);
                     if (record.ok()) {
                         results.push_back(record.value());
                     }
@@ -310,7 +326,7 @@ public:
             if (!end_key.empty() && iterator->key().ToString() >= end_key) {
                 break;
             }
-            auto record = DeserializeRecord(iterator->value().ToString());
+            auto record = DecodeStoredRecord(iterator->value().ToString());
             if (!record.ok()) {
                 return record.status();
             }
@@ -332,39 +348,19 @@ public:
     }
 
 private:
-    struct RocksDbDeleter {
-        void operator()(rocksdb::DB* db) const { delete db; }
-    };
-
     rocksdb::ColumnFamilyHandle* GetOrCreateColumnFamily(const std::string& collection) {
-        {
-            std::lock_guard<std::mutex> lock(cf_mutex_);
-            auto iterator = column_families_.find(collection);
-            if (iterator != column_families_.end()) {
-                return iterator->second;
-            }
+        std::lock_guard<std::mutex> lock(cf_mutex_);
+        auto iterator = column_families_.find(collection);
+        if (iterator != column_families_.end()) {
+            return iterator->second;
         }
 
-        // Create column family
         rocksdb::ColumnFamilyHandle* cf = nullptr;
         auto status = db_->CreateColumnFamily(rocksdb::ColumnFamilyOptions(), collection, &cf);
         if (!status.ok()) {
-            // May already exist (race condition), try to get it
-            std::vector<rocksdb::ColumnFamilyHandle*> handles;
-            std::vector<std::string> names;
-            auto list_status = db_->ListColumnFamilies(rocksdb::Options(), db_path_, &names);
-            if (!list_status.ok()) {
-                return nullptr;
-            }
-            // Re-open approach: just look up the handle
-            for (int i = 0; i < db_->NumberColumnFamilies(); ++i) {
-                // Try to get by creating it again (it may already exist)
-            }
-            // Simpler: just try to create it and ignore the "already exists" error
             return nullptr;
         }
 
-        std::lock_guard<std::mutex> lock(cf_mutex_);
         column_families_[collection] = cf;
         return cf;
     }
@@ -379,7 +375,7 @@ private:
     }
 
     std::string db_path_;
-    std::unique_ptr<rocksdb::DB, RocksDbDeleter> db_;
+    std::unique_ptr<rocksdb::DB> db_;
     mutable std::mutex cf_mutex_;
     std::map<std::string, rocksdb::ColumnFamilyHandle*> column_families_;
 };
@@ -481,24 +477,41 @@ kvai::infra::Status WriteAheadKvStore::FlushSnapshot() {
         return status;
     }
 
-    std::ofstream output(snapshot_path_, std::ios::trunc);
+    std::ofstream output(snapshot_path_, std::ios::binary | std::ios::trunc);
     if (!output.is_open()) {
         return kvai::infra::Status::Internal("failed to open snapshot file for writing");
     }
 
+    output << persistence::MagicHeader();
     for (const auto& [_, record] : records_) {
-        output << SerializeRecord(record) << '\n';
+        output << persistence::EncodeFrame(persistence::EncodeDocumentRecord(record));
     }
 
     return kvai::infra::Status::Ok();
 }
 
 kvai::infra::Status WriteAheadKvStore::ReplaySnapshotLocked() {
-    std::ifstream input(snapshot_path_);
-    if (!input.is_open()) {
+    auto snapshot = ReadWholeFile(snapshot_path_);
+    if (!snapshot.ok()) {
         return kvai::infra::Status::Ok();
     }
 
+    if (HasPersistenceMagic(snapshot.value())) {
+        auto frames = persistence::DecodeFrames(snapshot.value());
+        if (!frames.ok()) {
+            return frames.status();
+        }
+        for (const auto& frame : frames.value()) {
+            auto record = persistence::DecodeDocumentRecord(frame);
+            if (!record.ok()) {
+                return record.status();
+            }
+            records_[BuildCompositeKey(record.value().collection, record.value().key)] = record.value();
+        }
+        return kvai::infra::Status::Ok();
+    }
+
+    std::istringstream input(snapshot.value());
     std::string line;
     while (std::getline(input, line)) {
         auto record = DeserializeRecord(line);
@@ -512,11 +525,31 @@ kvai::infra::Status WriteAheadKvStore::ReplaySnapshotLocked() {
 }
 
 kvai::infra::Status WriteAheadKvStore::ReplayWalLocked() {
-    std::ifstream input(wal_path_);
-    if (!input.is_open()) {
+    auto wal = ReadWholeFile(wal_path_);
+    if (!wal.ok()) {
         return kvai::infra::Status::Ok();
     }
 
+    if (HasPersistenceMagic(wal.value())) {
+        auto frames = persistence::DecodeFrames(wal.value());
+        if (!frames.ok()) {
+            return frames.status();
+        }
+        for (const auto& frame : frames.value()) {
+            auto entry = persistence::DecodeWalEntry(frame);
+            if (!entry.ok()) {
+                return entry.status();
+            }
+            if (entry.value().operation == persistence::WalOperation::kPut) {
+                records_[BuildCompositeKey(entry.value().record.collection, entry.value().record.key)] = entry.value().record;
+            } else {
+                records_.erase(BuildCompositeKey(entry.value().collection, entry.value().key));
+            }
+        }
+        return kvai::infra::Status::Ok();
+    }
+
+    std::istringstream input(wal.value());
     std::string line;
     while (std::getline(input, line)) {
         if (line.size() < 2 || line[1] != '|') {
@@ -547,12 +580,30 @@ kvai::infra::Status WriteAheadKvStore::AppendWalLocked(char operation, const Doc
         return status;
     }
 
-    std::ofstream output(wal_path_, std::ios::app);
+    const bool rewrite_legacy = ShouldRewriteLegacyWal(wal_path_);
+    const bool needs_header = rewrite_legacy || !std::filesystem::exists(wal_path_) || std::filesystem::file_size(wal_path_) == 0;
+    std::ofstream output(wal_path_, std::ios::binary | (rewrite_legacy ? std::ios::trunc : std::ios::app));
     if (!output.is_open()) {
         return kvai::infra::Status::Internal("failed to open wal file for writing");
     }
 
-    output << operation << '|' << SerializeRecord(record) << '\n';
+    if (needs_header) {
+        output << persistence::MagicHeader();
+    }
+    if (rewrite_legacy) {
+        for (const auto& [_, current] : records_) {
+            (void)_;
+            persistence::WalEntry current_entry;
+            current_entry.operation = persistence::WalOperation::kPut;
+            current_entry.record = current;
+            output << persistence::EncodeFrame(persistence::EncodeWalEntry(current_entry));
+        }
+        return kvai::infra::Status::Ok();
+    }
+    persistence::WalEntry entry;
+    entry.operation = operation == 'D' ? persistence::WalOperation::kDelete : persistence::WalOperation::kPut;
+    entry.record = record;
+    output << persistence::EncodeFrame(persistence::EncodeWalEntry(entry));
     return kvai::infra::Status::Ok();
 }
 
@@ -562,12 +613,31 @@ kvai::infra::Status WriteAheadKvStore::AppendDeleteLocked(const std::string& col
         return status;
     }
 
-    std::ofstream output(wal_path_, std::ios::app);
+    const bool rewrite_legacy = ShouldRewriteLegacyWal(wal_path_);
+    const bool needs_header = rewrite_legacy || !std::filesystem::exists(wal_path_) || std::filesystem::file_size(wal_path_) == 0;
+    std::ofstream output(wal_path_, std::ios::binary | (rewrite_legacy ? std::ios::trunc : std::ios::app));
     if (!output.is_open()) {
         return kvai::infra::Status::Internal("failed to open wal file for writing");
     }
 
-    output << 'D' << '|' << Escape(collection) << '|' << Escape(key) << '\n';
+    if (needs_header) {
+        output << persistence::MagicHeader();
+    }
+    if (rewrite_legacy) {
+        for (const auto& [_, current] : records_) {
+            (void)_;
+            persistence::WalEntry current_entry;
+            current_entry.operation = persistence::WalOperation::kPut;
+            current_entry.record = current;
+            output << persistence::EncodeFrame(persistence::EncodeWalEntry(current_entry));
+        }
+        return kvai::infra::Status::Ok();
+    }
+    persistence::WalEntry entry;
+    entry.operation = persistence::WalOperation::kDelete;
+    entry.collection = collection;
+    entry.key = key;
+    output << persistence::EncodeFrame(persistence::EncodeWalEntry(entry));
     return kvai::infra::Status::Ok();
 }
 

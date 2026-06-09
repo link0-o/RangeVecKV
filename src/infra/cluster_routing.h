@@ -2,7 +2,7 @@
 
 #include <cstdint>
 #include <map>
-#include <mutex>
+#include <shared_mutex>
 #include <string>
 #include <vector>
 
@@ -39,7 +39,7 @@ private:
 
     std::string local_node_id_;
     std::size_t virtual_nodes_;
-    mutable std::mutex mutex_;
+    mutable std::shared_mutex mutex_;
     std::vector<ClusterNode> nodes_;
     std::map<std::uint64_t, std::size_t> ring_;
 };

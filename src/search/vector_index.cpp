@@ -5,9 +5,14 @@
 #include <fstream>
 #include <sstream>
 
+#include "core/persistence_codec.h"
+#include "infra/logging.h"
+
 #if defined(KVAI_HAVE_FAISS)
 #include <faiss/IndexFlat.h>
 #include <faiss/IndexIDMap.h>
+#include <faiss/IndexIVF.h>
+#include <faiss/IndexIVFFlat.h>
 #include <faiss/index_io.h>
 #include <faiss/impl/IDSelector.h>
 #endif
@@ -15,19 +20,6 @@
 namespace kvai::search {
 
 namespace {
-
-std::string Escape(std::string value) {
-    std::string escaped;
-    for (char ch : value) {
-        if (ch == '\\' || ch == '|' || ch == ',' || ch == ';' || ch == '=' || ch == '\n') {
-            escaped.push_back('\\');
-            escaped.push_back(ch == '\n' ? 'n' : ch);
-        } else {
-            escaped.push_back(ch);
-        }
-    }
-    return escaped;
-}
 
 std::string Unescape(const std::string& value) {
     std::string result;
@@ -73,19 +65,6 @@ std::vector<std::string> SplitEscaped(const std::string& value, char delimiter) 
     return parts;
 }
 
-std::string SerializeMetadata(const std::map<std::string, std::string>& metadata) {
-    std::ostringstream stream;
-    bool first = true;
-    for (const auto& [key, value] : metadata) {
-        if (!first) {
-            stream << ';';
-        }
-        first = false;
-        stream << Escape(key) << '=' << Escape(value);
-    }
-    return stream.str();
-}
-
 std::map<std::string, std::string> DeserializeMetadata(const std::string& encoded) {
     std::map<std::string, std::string> metadata;
     for (const auto& part : SplitEscaped(encoded, ';')) {
@@ -99,17 +78,6 @@ std::map<std::string, std::string> DeserializeMetadata(const std::string& encode
         metadata.emplace(Unescape(part.substr(0, separator)), Unescape(part.substr(separator + 1)));
     }
     return metadata;
-}
-
-std::string SerializeVector(const std::vector<float>& values) {
-    std::ostringstream stream;
-    for (std::size_t index = 0; index < values.size(); ++index) {
-        if (index > 0) {
-            stream << ',';
-        }
-        stream << values[index];
-    }
-    return stream.str();
 }
 
 std::vector<float> DeserializeVector(const std::string& encoded) {
@@ -137,6 +105,20 @@ kvai::infra::Status EnsureParentDirectory(const std::string& path) {
     }
 
     return kvai::infra::Status::Ok();
+}
+
+kvai::infra::StatusOr<std::string> ReadWholeFile(const std::string& path) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input.is_open()) {
+        return kvai::infra::Status::NotFound("file not found: " + path);
+    }
+    std::ostringstream buffer;
+    buffer << input.rdbuf();
+    return buffer.str();
+}
+
+bool HasPersistenceMagic(const std::string& bytes) {
+    return bytes.rfind(kvai::core::persistence::MagicHeader(), 0) == 0;
 }
 
 }  // namespace
@@ -170,23 +152,40 @@ public:
             }
         }
 
-        std::ifstream input(metadata_path_);
-        std::string line;
-        while (std::getline(input, line)) {
-            const auto parts = SplitEscaped(line, '|');
-            if (parts.size() != 6) {
-                continue;
+        auto metadata = ReadWholeFile(metadata_path_);
+        if (metadata.ok() && HasPersistenceMagic(metadata.value())) {
+            auto frames = kvai::core::persistence::DecodeFrames(metadata.value());
+            if (!frames.ok()) {
+                return frames.status();
             }
-            const auto id = static_cast<faiss::idx_t>(std::stoll(parts[0]));
-            kvai::core::DocumentRecord record;
-            record.collection = Unescape(parts[1]);
-            record.key = Unescape(parts[2]);
-            record.title = Unescape(parts[3]);
-            record.body = Unescape(parts[4]);
-            record.metadata = DeserializeMetadata(parts[5]);
-            entries_[id] = record;
-            key_to_id_[kvai::core::BuildCompositeKey(record.collection, record.key)] = id;
-            next_id_ = std::max<faiss::idx_t>(next_id_, id + 1);
+            for (const auto& frame : frames.value()) {
+                auto decoded = kvai::core::persistence::DecodeVectorEntry(frame);
+                if (!decoded.ok()) {
+                    return decoded.status();
+                }
+                const auto id = next_id_++;
+                entries_[id] = decoded.value().record;
+                key_to_id_[kvai::core::BuildCompositeKey(decoded.value().record.collection, decoded.value().record.key)] = id;
+            }
+        } else if (metadata.ok()) {
+            std::istringstream input(metadata.value());
+            std::string line;
+            while (std::getline(input, line)) {
+                const auto parts = SplitEscaped(line, '|');
+                if (parts.size() != 6) {
+                    continue;
+                }
+                const auto id = static_cast<faiss::idx_t>(std::stoll(parts[0]));
+                kvai::core::DocumentRecord record;
+                record.collection = Unescape(parts[1]);
+                record.key = Unescape(parts[2]);
+                record.title = Unescape(parts[3]);
+                record.body = Unescape(parts[4]);
+                record.metadata = DeserializeMetadata(parts[5]);
+                entries_[id] = record;
+                key_to_id_[kvai::core::BuildCompositeKey(record.collection, record.key)] = id;
+                next_id_ = std::max<faiss::idx_t>(next_id_, id + 1);
+            }
         }
         return kvai::infra::Status::Ok();
     }
@@ -337,13 +336,15 @@ public:
                 return kvai::infra::Status::Internal(std::string("faiss flush failed: ") + error.what());
             }
         }
-        std::ofstream output(metadata_path_, std::ios::trunc);
+        std::ofstream output(metadata_path_, std::ios::binary | std::ios::trunc);
         if (!output.is_open()) {
             return kvai::infra::Status::Internal("failed to open faiss metadata snapshot");
         }
+        output << kvai::core::persistence::MagicHeader();
         for (const auto& [id, record] : entries_) {
-            output << id << '|' << Escape(record.collection) << '|' << Escape(record.key) << '|' << Escape(record.title) << '|' << Escape(record.body) << '|'
-                   << SerializeMetadata(record.metadata) << '\n';
+            (void)id;
+            output << kvai::core::persistence::EncodeFrame(
+                kvai::core::persistence::EncodeVectorEntry(kvai::core::persistence::VectorEntry{record, {}}));
         }
         return kvai::infra::Status::Ok();
     }
@@ -377,36 +378,23 @@ private:
         }
 
         try {
-            // Collect all training vectors (from existing index + pending)
-            auto* flat_index = dynamic_cast<faiss::IndexFlat*>(index_->index);
-            if (!flat_index) {
+            if (dynamic_cast<faiss::IndexFlat*>(index_->index) == nullptr) {
                 return;  // Already IVF or unexpected type
             }
 
-            // Create IVF index
+            std::vector<float> training_vectors;
+            training_vectors.reserve(untrained_vectors_.size() * static_cast<std::size_t>(dimensions_));
+            for (const auto& pending : untrained_vectors_) {
+                training_vectors.insert(training_vectors.end(), pending.vector.begin(), pending.vector.end());
+            }
+
             auto* quantizer = new faiss::IndexFlatIP(dimensions_);
             auto* ivf = new faiss::IndexIVFFlat(quantizer, dimensions_, effective_nlist, faiss::METRIC_INNER_PRODUCT);
             ivf->own_fields = true;
-            ivf->train(static_cast<faiss::idx_t>(flat_index->ntotal), flat_index->get_xb());
+            ivf->train(static_cast<faiss::idx_t>(untrained_vectors_.size()), training_vectors.data());
 
-            // Rebuild the ID-mapped index
             auto new_index = std::make_unique<faiss::IndexIDMap2>(ivf);
 
-            // Re-add all existing entries from the old flat index
-            // We need to add them with their original IDs
-            for (const auto& [id, record] : entries_) {
-                const auto kit = key_to_id_.find(kvai::core::BuildCompositeKey(record.collection, record.key));
-                if (kit == key_to_id_.end() || kit->second != id) {
-                    continue;
-                }
-                // Find the vector for this entry
-                const float* xb = flat_index->get_xb();
-                faiss::idx_t ntotal = flat_index->ntotal;
-                // We can't easily get individual vectors from flat index by ID,
-                // so just add the pending vectors
-            }
-
-            // Add pending vectors to the new IVF index
             for (const auto& pending : untrained_vectors_) {
                 new_index->add_with_ids(1, pending.vector.data(), &pending.id);
             }
@@ -422,7 +410,8 @@ private:
                                    {{"error", error.what()}});
             // Add pending vectors to flat index instead
             for (const auto& pending : untrained_vectors_) {
-                index_->add_with_ids(1, pending.vector.data(), const_cast<faiss::idx_t*>(&pending.id));
+                auto id = pending.id;
+                index_->add_with_ids(1, pending.vector.data(), &id);
             }
             untrained_vectors_.clear();
             needs_training_ = false;
@@ -455,11 +444,28 @@ kvai::infra::Status PersistentVectorIndex::Recover() {
     std::lock_guard<std::mutex> lock(mutex_);
     entries_.clear();
 
-    std::ifstream input(snapshot_path_);
-    if (!input.is_open()) {
+    auto snapshot = ReadWholeFile(snapshot_path_);
+    if (!snapshot.ok()) {
         return kvai::infra::Status::Ok();
     }
 
+    if (HasPersistenceMagic(snapshot.value())) {
+        auto frames = kvai::core::persistence::DecodeFrames(snapshot.value());
+        if (!frames.ok()) {
+            return frames.status();
+        }
+        for (const auto& frame : frames.value()) {
+            auto decoded = kvai::core::persistence::DecodeVectorEntry(frame);
+            if (!decoded.ok()) {
+                return decoded.status();
+            }
+            entries_[kvai::core::BuildCompositeKey(decoded.value().record.collection, decoded.value().record.key)] =
+                Entry{decoded.value().record, decoded.value().vector};
+        }
+        return kvai::infra::Status::Ok();
+    }
+
+    std::istringstream input(snapshot.value());
     std::string line;
     while (std::getline(input, line)) {
         const auto parts = SplitEscaped(line, '|');
@@ -530,14 +536,15 @@ kvai::infra::Status PersistentVectorIndex::FlushSnapshot() {
         return status;
     }
 
-    std::ofstream output(snapshot_path_, std::ios::trunc);
+    std::ofstream output(snapshot_path_, std::ios::binary | std::ios::trunc);
     if (!output.is_open()) {
         return kvai::infra::Status::Internal("failed to open index snapshot file");
     }
 
+    output << kvai::core::persistence::MagicHeader();
     for (const auto& [_, entry] : entries_) {
-        output << Escape(entry.record.collection) << '|' << Escape(entry.record.key) << '|' << Escape(entry.record.title) << '|' << Escape(entry.record.body)
-               << '|' << SerializeMetadata(entry.record.metadata) << '|' << SerializeVector(entry.vector) << '\n';
+        output << kvai::core::persistence::EncodeFrame(
+            kvai::core::persistence::EncodeVectorEntry(kvai::core::persistence::VectorEntry{entry.record, entry.vector}));
     }
 
     return kvai::infra::Status::Ok();

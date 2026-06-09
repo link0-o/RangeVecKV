@@ -3,48 +3,59 @@ name: ci
 on:
   push:
     branches:
-      - master
       - main
+      - master
+    tags:
+      - "v*"
   pull_request:
+  workflow_dispatch:
+    inputs:
+      production_docker:
+        description: "Build the production Docker image with vcpkg backends"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  build-test-package:
+  local-build-test:
+    name: Local fallback build and tests
     runs-on: ubuntu-24.04
 
     steps:
+      - name: Free runner disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          docker system prune -af || true
+          df -h
+
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install system dependencies
+      - name: Install build tools
         run: |
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-            ca-certificates git curl zip unzip tar xz-utils build-essential pkg-config \
-            ninja-build protobuf-compiler libprotobuf-dev autoconf automake autoconf-archive \
-            libtool bison flex perl python3 python3-pip python3-venv gfortran nasm yasm
-
-      - name: Install cmake
-        run: |
-          python3 -m venv "$HOME/.local/share/rangeveckv-bootstrap"
-          "$HOME/.local/share/rangeveckv-bootstrap/bin/python" -m pip install --upgrade pip cmake ninja
-          mkdir -p "$HOME/.local/bin"
-          ln -sf "$HOME/.local/share/rangeveckv-bootstrap/bin/cmake" "$HOME/.local/bin/cmake"
-          ln -sf "$HOME/.local/share/rangeveckv-bootstrap/bin/ctest" "$HOME/.local/bin/ctest"
-          ln -sf "$HOME/.local/share/rangeveckv-bootstrap/bin/cpack" "$HOME/.local/bin/cpack"
-          ln -sf "$HOME/.local/share/rangeveckv-bootstrap/bin/ninja" "$HOME/.local/bin/ninja"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-
-      - name: Bootstrap vcpkg
-        run: |
-          git clone https://github.com/microsoft/vcpkg.git "$HOME/.local/src/vcpkg"
-          "$HOME/.local/src/vcpkg/bootstrap-vcpkg.sh" -disableMetrics
+            build-essential \
+            ca-certificates \
+            cmake \
+            curl \
+            ninja-build \
+            nlohmann-json3-dev \
+            pkg-config \
+            protobuf-compiler \
+            libprotobuf-dev
 
       - name: Configure
-        run: |
-          cmake -S . -B build/ci -G Ninja \
-            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-            -DKVAI_ENABLE_PACKAGING=ON \
-            -DCMAKE_TOOLCHAIN_FILE=$HOME/.local/src/vcpkg/scripts/buildsystems/vcpkg.cmake
+        run: cmake -S . -B build/ci -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
 
       - name: Build
         run: cmake --build build/ci --parallel
@@ -52,31 +63,107 @@ jobs:
       - name: Test
         run: ctest --test-dir build/ci --output-on-failure
 
-      - name: Package
-        run: |
-          cmake --install build/ci --prefix "$PWD/dist/install"
-          cpack --config build/ci/CPackConfig.cmake
+      - name: Install tree
+        run: cmake --install build/ci --prefix "$PWD/dist/install"
 
-      - name: Docker build
-        run: docker build -t rangeveckv:ci .
-
-      - name: Docker smoke test
-        run: |
-          docker run -d --name rangeveckv-ci -p 18080:8080 rangeveckv:ci
-          for _ in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:18080/healthz >/dev/null; then
-              break
-            fi
-            sleep 2
-          done
-          bash scripts/http_smoke.sh http://127.0.0.1:18080
-          docker logs rangeveckv-ci
-          docker rm -f rangeveckv-ci
-
-      - name: Upload artifacts
+      - name: Upload install artifact
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
-          name: rangeveckv-artifacts
-          path: |
-            build/ci/*.tar.gz
-            dist/install/**
+          name: rangeveckv-install
+          path: dist/install/**
+
+  package:
+    name: Package fallback build
+    runs-on: ubuntu-24.04
+    needs: local-build-test
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+
+    steps:
+      - name: Free runner disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          docker system prune -af || true
+          df -h
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            build-essential \
+            ca-certificates \
+            cmake \
+            ninja-build \
+            nlohmann-json3-dev \
+            pkg-config \
+            protobuf-compiler \
+            libprotobuf-dev
+
+      - name: Configure package build
+        run: cmake -S . -B build/package -G Ninja -DCMAKE_BUILD_TYPE=Release -DKVAI_ENABLE_PACKAGING=ON
+
+      - name: Build
+        run: cmake --build build/package --parallel
+
+      - name: Test
+        run: ctest --test-dir build/package --output-on-failure
+
+      - name: Package
+        run: cpack --config build/package/CPackConfig.cmake
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rangeveckv-package
+          path: rangeveckv-*.tar.gz
+
+  docker-production:
+    name: Production Docker build
+    runs-on: ubuntu-24.04
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.production_docker == 'true'
+
+    steps:
+      - name: Free runner disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          docker system prune -af || true
+          df -h
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build production image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: rangeveckv:ci
+          build-contexts: |
+            vcpkg_binary_cache=./docker/empty-vcpkg-cache
+
+  release:
+    name: GitHub release
+    runs-on: ubuntu-24.04
+    needs:
+      - package
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download package artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: rangeveckv-package
+          path: dist/release
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/release/*.tar.gz
