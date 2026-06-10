@@ -80,7 +80,7 @@ docker compose up --build -d
 
 旧的 `host:port` value 仍然兼容可读。prefix watch 使用明确的 range/prefix 语义，监听配置前缀下的所有节点 key；watch 断开后会重新拉取全量节点并带退避重连。keepalive 和 watch 状态会通过 `/healthz` 的 `etcd_discovery_*` 字段暴露。
 
-当前边界：ring 变化只更新路由，不自动迁移历史数据；owner 是远端节点时写入仍返回 `Unavailable`，错误信息会带上远端节点 endpoint，远程转发留作后续独立增强。
+可通过 `cluster.data_migration_enabled=true` 开启异步数据迁移。开启后，ring 变化会触发本地 KV 扫描：如果某条记录的新 owner 已经不是本节点，就通过内部 `/internal/migration/records` 接口发送到目标 owner；目标写入成功后，源节点会保留到 `cluster.migration_delete_delay_ms` 到期再清理。这是最终一致的 best-effort 迁移，不是 Raft/quorum 强一致复制。普通客户端写入仍不会自动远程转发，owner 是远端节点时仍返回 `Unavailable` 并带目标 endpoint。
 
 ## API 示例
 

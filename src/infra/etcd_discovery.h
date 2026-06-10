@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -48,6 +49,7 @@ public:
     /// Returns the currently known cluster nodes (thread-safe).
     std::vector<ClusterNode> CurrentNodes() const;
     EtcdDiscoveryStatus DiscoveryStatus() const;
+    void SetRingChangeCallback(std::function<void()> callback);
 
 private:
     void WatchLoop();
@@ -74,6 +76,8 @@ private:
     mutable std::mutex client_mutex_;
     mutable std::mutex status_mutex_;
     EtcdDiscoveryStatus status_;
+    mutable std::mutex callback_mutex_;
+    std::function<void()> ring_change_callback_;
 };
 
 }  // namespace kvai::infra

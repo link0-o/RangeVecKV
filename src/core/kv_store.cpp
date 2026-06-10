@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <set>
 
 #include "core/persistence_codec.h"
 
@@ -338,6 +339,17 @@ public:
         return results;
     }
 
+    kvai::infra::StatusOr<std::vector<std::string>> Collections() const override {
+        std::lock_guard<std::mutex> lock(cf_mutex_);
+        std::vector<std::string> collections;
+        collections.reserve(column_families_.size());
+        for (const auto& [name, _] : column_families_) {
+            (void)_;
+            collections.push_back(name);
+        }
+        return collections;
+    }
+
     kvai::infra::Status FlushSnapshot() override {
         if (db_ != nullptr) {
             rocksdb::FlushOptions flush_options;
@@ -468,6 +480,18 @@ kvai::infra::StatusOr<std::vector<DocumentRecord>> WriteAheadKvStore::Range(cons
     }
 
     return results;
+}
+
+kvai::infra::StatusOr<std::vector<std::string>> WriteAheadKvStore::Collections() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::set<std::string> names;
+    for (const auto& [_, record] : records_) {
+        (void)_;
+        if (!record.collection.empty()) {
+            names.insert(record.collection);
+        }
+    }
+    return std::vector<std::string>(names.begin(), names.end());
 }
 
 kvai::infra::Status WriteAheadKvStore::FlushSnapshot() {

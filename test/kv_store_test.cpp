@@ -53,6 +53,13 @@ int main() {
     if (!Expect(range.value().size() == 1, "range size mismatch")) {
         return 1;
     }
+    auto collections = recovered.Collections();
+    if (!Expect(collections.ok(), "collections failed")) {
+        return 1;
+    }
+    if (!Expect(!collections.value().empty() && collections.value().front() == "documents", "collections missing documents")) {
+        return 1;
+    }
 
     const auto legacy_wal = temp_dir / "legacy.wal";
     const auto legacy_snapshot = temp_dir / "legacy.snapshot";

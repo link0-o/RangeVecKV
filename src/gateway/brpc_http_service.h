@@ -39,6 +39,11 @@ public:
                         kvai::v1::HttpResponse* response,
                         google::protobuf::Closure* done) override;
 
+    void MigrateRecord(google::protobuf::RpcController* controller,
+                       const kvai::v1::HttpRequest* request,
+                       kvai::v1::HttpResponse* response,
+                       google::protobuf::Closure* done) override;
+
     void Healthz(google::protobuf::RpcController* controller,
                  const kvai::v1::HttpRequest* request,
                  kvai::v1::HttpResponse* response,

@@ -116,6 +116,17 @@ bool ReadBool(const YAML::Node& node, const std::string& key, bool default_value
     return default_value;
 }
 
+std::size_t ReadSize(const YAML::Node& node, const std::string& key, std::size_t default_value) {
+    if (!node.IsMap()) {
+        return default_value;
+    }
+    const auto child = node[key];
+    if (!child) {
+        return default_value;
+    }
+    return child.as<std::size_t>();
+}
+
 /// Detect whether a YAML document uses the nested section format.
 /// Nested format means the root contains known section keys like "server", "gateway", etc.
 bool IsNestedFormat(const YAML::Node& root) {
@@ -223,6 +234,11 @@ ServerConfig LoadNestedConfig(const YAML::Node& root) {
         if (cluster["replication_factor"]) {
             config.replication_factor = cluster["replication_factor"].as<std::size_t>();
         }
+        config.data_migration_enabled = ReadBool(cluster, "data_migration_enabled", config.data_migration_enabled);
+        config.migration_delete_delay_ms = static_cast<std::uint64_t>(
+            ReadSize(cluster, "migration_delete_delay_ms", static_cast<std::size_t>(config.migration_delete_delay_ms)));
+        config.migration_batch_size = ReadSize(cluster, "migration_batch_size", config.migration_batch_size);
+        config.migration_max_retries = ReadSize(cluster, "migration_max_retries", config.migration_max_retries);
         config.cluster_nodes = ReadString(cluster, "nodes", config.cluster_nodes);
         config.etcd_endpoints = ReadString(cluster, "etcd_endpoints", config.etcd_endpoints);
         config.etcd_prefix = ReadString(cluster, "etcd_prefix", config.etcd_prefix);
@@ -381,6 +397,18 @@ ServerConfig LoadNestedConfig(const YAML::Node& root) {
     }
     if (const auto iterator = values.find("cluster.replication_factor"); iterator != values.end()) {
         config.replication_factor = std::stoul(iterator->second);
+    }
+    if (const auto iterator = values.find("cluster.data_migration_enabled"); iterator != values.end()) {
+        config.data_migration_enabled = ParseBool(iterator->second);
+    }
+    if (const auto iterator = values.find("cluster.migration_delete_delay_ms"); iterator != values.end()) {
+        config.migration_delete_delay_ms = static_cast<std::uint64_t>(std::stoull(iterator->second));
+    }
+    if (const auto iterator = values.find("cluster.migration_batch_size"); iterator != values.end()) {
+        config.migration_batch_size = std::stoul(iterator->second);
+    }
+    if (const auto iterator = values.find("cluster.migration_max_retries"); iterator != values.end()) {
+        config.migration_max_retries = std::stoul(iterator->second);
     }
     if (const auto iterator = values.find("cluster.nodes"); iterator != values.end()) {
         config.cluster_nodes = iterator->second;
@@ -547,6 +575,18 @@ StatusOr<ServerConfig> ConfigLoader::LoadFromFile(const std::string& path) {
         }
         if (const auto it = values.find("cluster.replication_factor"); it != values.end()) {
             config.replication_factor = std::stoul(it->second);
+        }
+        if (const auto it = values.find("cluster.data_migration_enabled"); it != values.end()) {
+            config.data_migration_enabled = ParseBool(it->second);
+        }
+        if (const auto it = values.find("cluster.migration_delete_delay_ms"); it != values.end()) {
+            config.migration_delete_delay_ms = static_cast<std::uint64_t>(std::stoull(it->second));
+        }
+        if (const auto it = values.find("cluster.migration_batch_size"); it != values.end()) {
+            config.migration_batch_size = std::stoul(it->second);
+        }
+        if (const auto it = values.find("cluster.migration_max_retries"); it != values.end()) {
+            config.migration_max_retries = std::stoul(it->second);
         }
         if (const auto it = values.find("cluster.nodes"); it != values.end()) {
             config.cluster_nodes = it->second;

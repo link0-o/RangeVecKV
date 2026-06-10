@@ -40,6 +40,10 @@ int main() {
             output << "cluster.advertise_host: node-a\n";
             output << "cluster.node_weight: 150\n";
             output << "cluster.node_zone: zone-a\n";
+            output << "cluster.data_migration_enabled: true\n";
+            output << "cluster.migration_delete_delay_ms: 42\n";
+            output << "cluster.migration_batch_size: 7\n";
+            output << "cluster.migration_max_retries: 3\n";
             output << "cluster.etcd_endpoints: http://etcd:2379\n";
         }
 
@@ -61,6 +65,10 @@ int main() {
             if (!Expect(config.value().advertise_host == "node-a", "flat: advertise_host not parsed")) ++failures;
             if (!Expect(config.value().node_weight == 150, "flat: node_weight not parsed")) ++failures;
             if (!Expect(config.value().node_zone == "zone-a", "flat: node_zone not parsed")) ++failures;
+            if (!Expect(config.value().data_migration_enabled, "flat: data_migration_enabled not parsed")) ++failures;
+            if (!Expect(config.value().migration_delete_delay_ms == 42, "flat: migration_delete_delay_ms not parsed")) ++failures;
+            if (!Expect(config.value().migration_batch_size == 7, "flat: migration_batch_size not parsed")) ++failures;
+            if (!Expect(config.value().migration_max_retries == 3, "flat: migration_max_retries not parsed")) ++failures;
             if (!Expect(config.value().etcd_endpoints == "http://etcd:2379", "flat: etcd_endpoints not parsed")) ++failures;
         }
     }
@@ -97,6 +105,10 @@ int main() {
             output << "  advertise_host: test-node\n";
             output << "  node_weight: 200\n";
             output << "  node_zone: zone-b\n";
+            output << "  data_migration_enabled: true\n";
+            output << "  migration_delete_delay_ms: 123\n";
+            output << "  migration_batch_size: 9\n";
+            output << "  migration_max_retries: 4\n";
             output << "  nodes: ${KVAI_TEST_CLUSTER}\n";
             output << "  etcd_endpoints: http://etcd:2379\n";
             output << "  etcd_lease_ttl_s: 20\n";
@@ -131,6 +143,10 @@ int main() {
             if (!Expect(config.value().advertise_host == "test-node", "nested: advertise_host not parsed")) ++failures;
             if (!Expect(config.value().node_weight == 200, "nested: node_weight not parsed")) ++failures;
             if (!Expect(config.value().node_zone == "zone-b", "nested: node_zone not parsed")) ++failures;
+            if (!Expect(config.value().data_migration_enabled, "nested: data_migration_enabled not parsed")) ++failures;
+            if (!Expect(config.value().migration_delete_delay_ms == 123, "nested: migration_delete_delay_ms not parsed")) ++failures;
+            if (!Expect(config.value().migration_batch_size == 9, "nested: migration_batch_size not parsed")) ++failures;
+            if (!Expect(config.value().migration_max_retries == 4, "nested: migration_max_retries not parsed")) ++failures;
             if (!Expect(config.value().etcd_endpoints == "http://etcd:2379", "nested: etcd endpoints not parsed")) ++failures;
             if (!Expect(config.value().etcd_lease_ttl_s == 20, "nested: etcd lease ttl not parsed")) ++failures;
             if (!Expect(config.value().tls_mode == "enabled", "nested: tls_mode not parsed")) ++failures;

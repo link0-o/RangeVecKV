@@ -6,6 +6,7 @@
 
 #include "ai/embedding_service.h"
 #include "core/kv_store.h"
+#include "gateway/data_migration.h"
 #include "gateway/interceptors.h"
 #include "gateway/semantic_search_service.h"
 #include "infra/cluster_routing.h"
@@ -35,6 +36,9 @@ public:
                                                                                    std::string end_key,
                                                                                    std::size_t limit) const;
     kvai::infra::Status DeleteKvRecord(std::string collection, std::string key, std::string trace_id);
+    kvai::infra::Status ApplyMigratedRecord(kvai::core::DocumentRecord record, bool semantic, std::string trace_id);
+    void TriggerMigrationScan();
+    [[nodiscard]] DataMigrationStatus MigrationStatus() const;
     kvai::infra::Status ReindexDocuments(std::string collection);
     [[nodiscard]] kvai::infra::RouteDecision DescribeRoute(const std::string& collection, const std::string& key) const;
     HealthReport HealthCheck(std::string trace_id) const;
@@ -55,6 +59,7 @@ private:
     FixedWindowRateLimiter rate_limiter_;
     std::unique_ptr<SemanticSearchService> service_;
     std::unique_ptr<kvai::infra::EtcdServiceDiscovery> discovery_;
+    std::unique_ptr<DataMigrationManager> migration_manager_;
     bool started_ = false;
 };
 

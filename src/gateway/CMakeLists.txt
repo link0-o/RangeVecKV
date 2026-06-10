@@ -1,6 +1,7 @@
 # Base gateway library: always compiled
 set(KVAI_GATEWAY_SOURCES
     auth.cpp
+    data_migration.cpp
     http_runtime.cpp
     interceptors.cpp
     json_helpers.cpp

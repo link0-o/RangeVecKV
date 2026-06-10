@@ -137,10 +137,13 @@ explicit etcd range over the configured prefix and reconnects with backoff after
 watch failures. Keepalive and watch status are exposed through `/healthz`
 `etcd_discovery_*` details.
 
-Ring rebuilds update request routing only. Automatic data migration and
-remote-owner write forwarding are not enabled yet; remote-owner writes return
-`Unavailable` with the owner endpoint so clients or an external gateway can
-retry against the owning node.
+Set `cluster.data_migration_enabled=true` to enable asynchronous data
+migration after ring rebuilds. A node scans local KV collections, sends records
+that now belong to a remote owner to `/internal/migration/records` on that owner,
+and keeps the source copy until `cluster.migration_delete_delay_ms` expires.
+Migration is best-effort and eventually consistent; it is not a Raft/quorum
+replication protocol. Remote-owner write forwarding for ordinary client requests
+is still disabled, so those writes return `Unavailable` with the owner endpoint.
 
 Fallback mode is intentionally retained so local build/test is not blocked by large production dependencies. It should not be described as the final production performance profile.
 

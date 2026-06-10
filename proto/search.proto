@@ -95,6 +95,8 @@ service GatewayService {
   rpc UpsertDocument(HttpRequest) returns (HttpResponse);
   // DELETE /v1/documents
   rpc DeleteDocument(HttpRequest) returns (HttpResponse);
+  // POST /internal/migration/records
+  rpc MigrateRecord(HttpRequest) returns (HttpResponse);
   // GET /healthz
   rpc Healthz(HttpRequest) returns (HttpResponse);
   // GET /metrics

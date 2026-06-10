@@ -27,6 +27,10 @@ struct ServerConfig {
     std::uint32_t node_weight = 100;
     std::string node_zone = "default";
     std::size_t replication_factor = 1;
+    bool data_migration_enabled = false;
+    std::uint64_t migration_delete_delay_ms = 300000;
+    std::size_t migration_batch_size = 100;
+    std::size_t migration_max_retries = 5;
     bool read_only_mode = false;
     bool enable_demo_data = true;
     bool require_api_key = false;

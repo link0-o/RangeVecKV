@@ -289,6 +289,11 @@ EtcdDiscoveryStatus EtcdServiceDiscovery::DiscoveryStatus() const {
     return status_;
 }
 
+void EtcdServiceDiscovery::SetRingChangeCallback(std::function<void()> callback) {
+    std::lock_guard<std::mutex> lock(callback_mutex_);
+    ring_change_callback_ = std::move(callback);
+}
+
 void EtcdServiceDiscovery::WatchLoop() {
     auto backoff = std::chrono::milliseconds(500);
     constexpr auto kMaxBackoff = std::chrono::milliseconds(5000);
@@ -410,8 +415,15 @@ void EtcdServiceDiscovery::RebuildRing(const std::vector<ClusterNode>& nodes) {
         }
         log::Info("etcd-discovery", "rebuilt consistent hash ring",
                   {{"node_count", std::to_string(nodes.size())},
-                   {"data_migration_enabled", "false"},
                    {"remote_forwarding_enabled", "false"}});
+        std::function<void()> callback;
+        {
+            std::lock_guard<std::mutex> lock(callback_mutex_);
+            callback = ring_change_callback_;
+        }
+        if (callback) {
+            callback();
+        }
     }
 }
 
@@ -475,6 +487,11 @@ EtcdDiscoveryStatus EtcdServiceDiscovery::DiscoveryStatus() const {
         status.last_error = "etcd service discovery is not available in this build";
     }
     return status;
+}
+
+void EtcdServiceDiscovery::SetRingChangeCallback(std::function<void()> callback) {
+    std::lock_guard<std::mutex> lock(callback_mutex_);
+    ring_change_callback_ = std::move(callback);
 }
 
 Status EtcdServiceDiscovery::ReloadNodes() {

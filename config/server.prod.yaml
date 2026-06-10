@@ -39,6 +39,10 @@ cluster:
   node_weight: ${KVAI_NODE_WEIGHT}
   node_zone: ${KVAI_NODE_ZONE}
   replication_factor: 1
+  data_migration_enabled: ${KVAI_DATA_MIGRATION_ENABLED}
+  migration_delete_delay_ms: ${KVAI_MIGRATION_DELETE_DELAY_MS}
+  migration_batch_size: 100
+  migration_max_retries: 5
   nodes: ${KVAI_CLUSTER_NODES}
   etcd_endpoints: ${KVAI_ETCD_ENDPOINTS}
   etcd_prefix: /rangeveckv/nodes/

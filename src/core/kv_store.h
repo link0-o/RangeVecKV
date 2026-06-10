@@ -27,6 +27,7 @@ public:
                                                                      const std::string& begin_key,
                                                                      const std::string& end_key,
                                                                      std::size_t limit) const = 0;
+    virtual kvai::infra::StatusOr<std::vector<std::string>> Collections() const = 0;
     virtual kvai::infra::Status FlushSnapshot() = 0;
 };
 
@@ -45,6 +46,7 @@ public:
                                                              const std::string& begin_key,
                                                              const std::string& end_key,
                                                              std::size_t limit) const override;
+    kvai::infra::StatusOr<std::vector<std::string>> Collections() const override;
     kvai::infra::Status FlushSnapshot() override;
 
 private:

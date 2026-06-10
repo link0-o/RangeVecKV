@@ -372,6 +372,58 @@ void BrpcHttpServiceImpl::DeleteDocument(google::protobuf::RpcController* contro
     }
 }
 
+void BrpcHttpServiceImpl::MigrateRecord(google::protobuf::RpcController* controller,
+                                         const kvai::v1::HttpRequest* /*request*/,
+                                         kvai::v1::HttpResponse* /*response*/,
+                                         google::protobuf::Closure* done) {
+    brpc::ClosureGuard done_guard(done);
+    auto* cntl = static_cast<brpc::Controller*>(controller);
+
+    auto headers = HeadersFromController(cntl);
+    auto auth_status = authenticator_.Authenticate(headers);
+    if (!auth_status.ok()) {
+        nlohmann::json error_json;
+        error_json["message"] = auth_status.ToString();
+        ReplyJson(cntl, 401, error_json.dump());
+        return;
+    }
+    const auto internal = headers.find("x-kvai-internal-migration");
+    if (internal == headers.end() || internal->second != "1") {
+        nlohmann::json error_json;
+        error_json["message"] = "missing internal migration header";
+        ReplyJson(cntl, 403, error_json.dump());
+        return;
+    }
+
+    kvai::core::DocumentRecord record;
+    bool semantic = false;
+    auto body = cntl->request_attachment().to_string();
+    try {
+        auto body_json = nlohmann::json::parse(body, nullptr, false);
+        if (!body_json.is_discarded()) {
+            auto parsed = json::ParseDocumentUpsert(body_json);
+            if (parsed.ok()) {
+                record = parsed.value();
+            }
+            if (body_json.contains("semantic") && body_json["semantic"].is_boolean()) {
+                semantic = body_json["semantic"].get<bool>();
+            }
+        }
+    } catch (...) {
+        // Malformed JSON — validation below returns an error.
+    }
+
+    auto status = server_.ApplyMigratedRecord(
+        record, semantic, headers.count("x-trace-id") == 0 ? std::string() : headers["x-trace-id"]);
+    if (!status.ok()) {
+        ReplyStatus(cntl, status);
+        return;
+    }
+    nlohmann::json ok_json;
+    ok_json["message"] = "migration record applied";
+    ReplyJson(cntl, 200, ok_json.dump());
+}
+
 void BrpcHttpServiceImpl::Healthz(google::protobuf::RpcController* controller,
                                    const kvai::v1::HttpRequest* /*request*/,
                                    kvai::v1::HttpResponse* /*response*/,

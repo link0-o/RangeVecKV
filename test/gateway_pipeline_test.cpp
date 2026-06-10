@@ -64,6 +64,9 @@ int main() {
     if (!Expect(report.details.find("remote_forwarding_enabled") != report.details.end(), "health details missing forwarding boundary")) {
         return 1;
     }
+    if (!Expect(report.details.find("data_migration_state") != report.details.end(), "health details missing migration state")) {
+        return 1;
+    }
 
     kvai::core::DocumentRecord record{"documents", "doc-999", "Router Aware Write", "Cluster aware document write path", {{"domain", "gateway"}}};
     if (!Expect(server.UpsertDocument(record, "").ok(), "upsert document failed")) {
@@ -108,6 +111,31 @@ int main() {
     }
     auto deleted = server.GetKvRecord("kv", "user:1", "");
     if (!Expect(!deleted.ok(), "kv get should fail after delete")) {
+        return 1;
+    }
+
+    kvai::core::DocumentRecord migrated_kv{"kv", "migrated:1", "", "migrated payload", {{"kind", "migration"}}};
+    if (!Expect(server.ApplyMigratedRecord(migrated_kv, false, "").ok(), "migrated kv apply failed")) {
+        return 1;
+    }
+    auto migrated_stored = server.GetKvRecord("kv", "migrated:1", "");
+    if (!Expect(migrated_stored.ok(), "migrated kv missing")) {
+        return 1;
+    }
+
+    kvai::core::DocumentRecord migrated_doc{"documents", "migrated-doc", "Migrated Semantic", "semantic migration payload", {{"domain", "migration"}}};
+    if (!Expect(server.ApplyMigratedRecord(migrated_doc, true, "").ok(), "migrated semantic apply failed")) {
+        return 1;
+    }
+    kvai::gateway::SemanticSearchQuery migrated_query;
+    migrated_query.collection = "documents";
+    migrated_query.query = "semantic migration payload";
+    migrated_query.top_k = 3;
+    auto migrated_search = server.Search(migrated_query);
+    if (!Expect(migrated_search.ok(), "migrated semantic search failed")) {
+        return 1;
+    }
+    if (!Expect(!migrated_search.value().hits.empty(), "migrated semantic search returned no hits")) {
         return 1;
     }
 

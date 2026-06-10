@@ -84,6 +84,9 @@ kvai::infra::Status InProcessGatewayServer::Start() {
         return nodes.status();
     }
     router_.Rebuild(nodes.value());
+    migration_manager_ = std::make_unique<DataMigrationManager>(
+        config_, *kv_store_, *embedding_service_, *vector_index_, router_);
+    migration_manager_->Start();
 
     // Start etcd discovery if configured
     if (config_.discovery_backend == "etcd") {
@@ -97,6 +100,11 @@ kvai::infra::Status InProcessGatewayServer::Start() {
 
         discovery_ = std::make_unique<kvai::infra::EtcdServiceDiscovery>(
             config_.etcd_endpoints, config_.etcd_prefix, local_node, config_.etcd_lease_ttl_s);
+        discovery_->SetRingChangeCallback([this]() {
+            if (migration_manager_) {
+                migration_manager_->TriggerScan();
+            }
+        });
         auto discovery_status = discovery_->Start(&router_);
         if (!discovery_status.ok()) {
             kvai::infra::log::Warn("gateway", "etcd discovery failed, falling back to static routing",
@@ -108,7 +116,13 @@ kvai::infra::Status InProcessGatewayServer::Start() {
     service_ = std::make_unique<SemanticSearchService>(config_, thread_pool_, *kv_store_, *embedding_service_, *vector_index_, metrics_);
     auto status = SeedDemoData();
     if (!status.ok()) {
+        if (migration_manager_) {
+            migration_manager_->Stop();
+        }
         return status;
+    }
+    if (migration_manager_) {
+        migration_manager_->TriggerScan();
     }
 
     started_ = true;
@@ -125,6 +139,10 @@ kvai::infra::Status InProcessGatewayServer::Stop() {
     if (discovery_) {
         discovery_->Stop();
         discovery_.reset();
+    }
+    if (migration_manager_) {
+        migration_manager_->Stop();
+        migration_manager_.reset();
     }
 
     auto status = kv_store_->FlushSnapshot();
@@ -296,6 +314,35 @@ kvai::infra::Status InProcessGatewayServer::DeleteKvRecord(std::string collectio
     return kv_store_->Delete(collection, key);
 }
 
+kvai::infra::Status InProcessGatewayServer::ApplyMigratedRecord(kvai::core::DocumentRecord record,
+                                                                 bool semantic,
+                                                                 std::string trace_id) {
+    if (!started_) {
+        return kvai::infra::Status::Unavailable("server not started");
+    }
+    if (config_.read_only_mode) {
+        return kvai::infra::Status::Unavailable("storage is in read-only mode");
+    }
+    record.collection = record.collection.empty() ? config_.default_collection : record.collection;
+    if (record.key.empty()) {
+        return kvai::infra::Status::InvalidArgument("migrated record key cannot be empty");
+    }
+    if (!trace_id.empty()) {
+        record.metadata["trace_id"] = TraceInjector::EnsureTraceId(trace_id);
+    }
+    return kvai::gateway::ApplyMigratedRecord(*kv_store_, *embedding_service_, *vector_index_, record, semantic);
+}
+
+void InProcessGatewayServer::TriggerMigrationScan() {
+    if (migration_manager_) {
+        migration_manager_->TriggerScan();
+    }
+}
+
+DataMigrationStatus InProcessGatewayServer::MigrationStatus() const {
+    return migration_manager_ == nullptr ? DataMigrationStatus{} : migration_manager_->Status();
+}
+
 kvai::infra::Status InProcessGatewayServer::ReindexDocuments(std::string collection) {
     if (!started_) {
         return kvai::infra::Status::Unavailable("server not started");
@@ -359,7 +406,19 @@ HealthReport InProcessGatewayServer::HealthCheck(std::string trace_id) const {
     report.details.emplace("disk_utilization_ratio", std::to_string(kvai::infra::MetricsRegistry::DiskUtilizationRatio(config_.wal_path)));
     report.details.emplace("thread_pool_workers", std::to_string(thread_pool_.WorkerCount()));
     report.details.emplace("thread_pool_pending_tasks", std::to_string(thread_pool_.PendingTasks()));
-    report.details.emplace("data_migration_enabled", "false");
+    const auto migration_status = MigrationStatus();
+    report.details.emplace("data_migration_enabled", migration_status.enabled ? "true" : "false");
+    report.details.emplace("data_migration_state", migration_status.state);
+    report.details.emplace("data_migration_pending", std::to_string(migration_status.pending));
+    report.details.emplace("data_migration_inflight", std::to_string(migration_status.inflight));
+    report.details.emplace("data_migration_succeeded", std::to_string(migration_status.succeeded));
+    report.details.emplace("data_migration_failed", std::to_string(migration_status.failed));
+    report.details.emplace("data_migration_delayed_delete", std::to_string(migration_status.delayed_delete));
+    report.details.emplace("data_migration_last_scan_unix_ms", std::to_string(migration_status.last_scan_unix_ms));
+    if (!migration_status.last_error.empty()) {
+        report.details.emplace("data_migration_last_error", migration_status.last_error);
+        report.warnings.push_back(migration_status.last_error);
+    }
     report.details.emplace("remote_forwarding_enabled", "false");
     if (discovery_) {
         const auto discovery_status = discovery_->DiscoveryStatus();

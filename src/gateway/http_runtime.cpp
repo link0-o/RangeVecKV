@@ -123,6 +123,8 @@ std::string HttpStatusText(int status_code) {
         return "Not Found";
     case 405:
         return "Method Not Allowed";
+    case 403:
+        return "Forbidden";
     case 500:
         return "Internal Server Error";
     case 501:
@@ -391,6 +393,39 @@ void HttpGatewayRuntime::HandleClient(int client_fd) {
         const auto collection = params.count("collection") == 0 ? std::string() : params.at("collection");
         const auto key = params.count("key") == 0 ? std::string() : params.at("key");
         response = json::BuildHttpResponse(200, "OK", "application/json", json::ToJson(server_.DescribeRoute(collection, key)).dump());
+    } else if (method == "POST" && path == "/internal/migration/records") {
+        const auto internal = headers.find("x-kvai-internal-migration");
+        if (internal == headers.end() || internal->second != "1") {
+            nlohmann::json error_json;
+            error_json["message"] = "missing internal migration header";
+            response = json::BuildHttpResponse(403, "Forbidden", "application/json", error_json.dump());
+        } else {
+            kvai::core::DocumentRecord record;
+            bool semantic = false;
+            try {
+                auto body_json = nlohmann::json::parse(body, nullptr, false);
+                if (!body_json.is_discarded()) {
+                    auto parsed = json::ParseDocumentUpsert(body_json);
+                    if (parsed.ok()) {
+                        record = parsed.value();
+                    }
+                    if (body_json.contains("semantic") && body_json["semantic"].is_boolean()) {
+                        semantic = body_json["semantic"].get<bool>();
+                    }
+                }
+            } catch (...) {
+                // Malformed JSON — validation below returns an error.
+            }
+            auto status = server_.ApplyMigratedRecord(
+                record, semantic, headers.count("x-trace-id") == 0 ? std::string() : headers.at("x-trace-id"));
+            if (!status.ok()) {
+                response = ErrorResponse(status);
+            } else {
+                nlohmann::json ok_json;
+                ok_json["message"] = "migration record applied";
+                response = json::BuildHttpResponse(200, "OK", "application/json", ok_json.dump());
+            }
+        }
     } else if (path == "/v1/kv") {
         const auto params = ParseQuery(query_string);
         if (method == "GET") {

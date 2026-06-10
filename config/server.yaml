@@ -36,6 +36,10 @@ cluster:
   node_weight: 100
   node_zone: default
   replication_factor: 1
+  data_migration_enabled: false
+  migration_delete_delay_ms: 300000
+  migration_batch_size: 100
+  migration_max_retries: 5
   nodes: node-local@127.0.0.1:8080
   etcd_endpoints: http://127.0.0.1:2379
   etcd_prefix: /rangeveckv/nodes/

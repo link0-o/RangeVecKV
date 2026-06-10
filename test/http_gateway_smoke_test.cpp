@@ -10,6 +10,7 @@
 #include <thread>
 
 #include "gateway/http_runtime.h"
+#include "gateway/server.h"
 
 namespace {
 
@@ -181,6 +182,84 @@ int main() {
 
     const auto kv_range = HttpRequest(config.port, "GET", "/v1/kv?collection=kv&limit=10", {}, {"X-API-Key: secret-token"});
     if (!Expect(kv_range.find("items") != std::string::npos, "kv range endpoint missing items")) {
+        runtime.Stop();
+        return 1;
+    }
+
+    const auto migration_forbidden = HttpRequest(config.port,
+                                                 "POST",
+                                                 "/internal/migration/records",
+                                                 "{\"collection\":\"kv\",\"key\":\"migrated:forbidden\",\"value\":\"blocked\"}",
+                                                 {"X-API-Key: secret-token"});
+    if (!Expect(migration_forbidden.find("403 Forbidden") != std::string::npos, "migration endpoint should require internal header")) {
+        runtime.Stop();
+        return 1;
+    }
+
+    const auto migration_put = HttpRequest(config.port,
+                                           "POST",
+                                           "/internal/migration/records",
+                                           "{\"collection\":\"kv\",\"key\":\"migrated:1\",\"value\":\"migrated kv value\",\"semantic\":false}",
+                                           {"X-API-Key: secret-token", "x-kvai-internal-migration: 1"});
+    if (!Expect(migration_put.find("200 OK") != std::string::npos, "migration endpoint returned non-200")) {
+        runtime.Stop();
+        return 1;
+    }
+    const auto migration_get = HttpRequest(config.port, "GET", "/v1/kv?collection=kv&key=migrated:1", {}, {"X-API-Key: secret-token"});
+    if (!Expect(migration_get.find("migrated kv value") != std::string::npos, "migrated kv record missing")) {
+        runtime.Stop();
+        return 1;
+    }
+
+    kvai::infra::ServerConfig source_config;
+    source_config.host = "127.0.0.1";
+    source_config.port = PickUnusedPort();
+    source_config.require_api_key = true;
+    source_config.api_key = "secret-token";
+    source_config.node_id = "source-node";
+    source_config.cluster_nodes = "target-node@127.0.0.1:" + std::to_string(config.port);
+    source_config.data_migration_enabled = true;
+    source_config.migration_delete_delay_ms = 300000;
+    source_config.migration_batch_size = 10;
+    source_config.migration_max_retries = 3;
+    source_config.enable_demo_data = false;
+    source_config.wal_path = (temp_dir / "source.wal").string();
+    source_config.snapshot_path = (temp_dir / "source.snapshot").string();
+    source_config.index_path = (temp_dir / "source.index").string();
+
+    kvai::gateway::InProcessGatewayServer source_server(source_config);
+    if (!Expect(source_server.Start().ok(), "source migration server start failed")) {
+        runtime.Stop();
+        return 1;
+    }
+    kvai::core::DocumentRecord source_record{"kv", "migrated:manager", "", "manager migrated value", {{"kind", "migration"}}};
+    if (!Expect(source_server.ApplyMigratedRecord(source_record, false, "").ok(), "source migration seed failed")) {
+        source_server.Stop();
+        runtime.Stop();
+        return 1;
+    }
+    source_server.TriggerMigrationScan();
+    bool migrated_by_manager = false;
+    for (int attempt = 0; attempt < 40; ++attempt) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        auto status = source_server.MigrationStatus();
+        if (status.succeeded > 0) {
+            migrated_by_manager = true;
+            break;
+        }
+    }
+    if (!Expect(migrated_by_manager, "migration manager did not report success")) {
+        source_server.Stop();
+        runtime.Stop();
+        return 1;
+    }
+    const auto manager_migration_get = HttpRequest(config.port, "GET", "/v1/kv?collection=kv&key=migrated:manager", {}, {"X-API-Key: secret-token"});
+    if (!Expect(manager_migration_get.find("manager migrated value") != std::string::npos, "manager migrated kv record missing on target")) {
+        source_server.Stop();
+        runtime.Stop();
+        return 1;
+    }
+    if (!Expect(source_server.Stop().ok(), "source migration server stop failed")) {
         runtime.Stop();
         return 1;
     }

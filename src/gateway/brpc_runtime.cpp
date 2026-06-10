@@ -41,7 +41,8 @@ kvai::infra::Status BrpcGatewayRuntime::Start() {
                                   "/v1/router => Router,"
                                   "/v1/kv => Kv,"
                                   "/v1/documents => UpsertDocument,"
-                                  "/v1/documents/delete => DeleteDocument") != 0) {
+                                  "/v1/documents/delete => DeleteDocument,"
+                                  "/internal/migration/records => MigrateRecord") != 0) {
         return kvai::infra::Status::Internal("failed to add BRPC HTTP service");
     }
 

@@ -136,7 +136,7 @@ When `cluster.discovery_backend=etcd`, each node registers a lease-backed key un
 
 Older `host:port` values remain readable. Prefix watching uses an explicit range over the configured prefix; watch disconnects are reloaded and reconnected with backoff. Keepalive/watch state is exposed in `/healthz` through `etcd_discovery_*` fields.
 
-Current boundary: ring changes update routing only. Automatic data migration and remote-owner write forwarding are intentionally not enabled yet; remote-owner writes return `Unavailable` with the target node endpoint.
+Optional data migration is available through `cluster.data_migration_enabled=true`. When enabled, ring changes trigger an asynchronous best-effort scan: records that now belong to a remote owner are sent to that owner through the internal `/internal/migration/records` endpoint, then kept locally until `cluster.migration_delete_delay_ms` expires. This is eventual consistency, not Raft/quorum replication. Ordinary client writes are still not remote-forwarded; remote-owner writes return `Unavailable` with the target node endpoint.
 
 ## API Examples
 
