@@ -24,23 +24,27 @@ struct RouteDecision {
     std::vector<ClusterNode> replicas;
     bool local_owner = false;
     bool has_primary = false;
+    std::uint32_t slot_id = 0;
 };
 
 StatusOr<std::vector<ClusterNode>> ParseStaticClusterNodes(const std::string& encoded);
 
 class ConsistentHashRouter {
 public:
-    explicit ConsistentHashRouter(std::string local_node_id, std::size_t virtual_nodes = 64);
+    explicit ConsistentHashRouter(std::string local_node_id, std::size_t virtual_nodes = 64, std::size_t slot_count = 4096);
 
     void Rebuild(const std::vector<ClusterNode>& nodes);
     [[nodiscard]] RouteDecision Route(const std::string& collection, const std::string& key, std::size_t replication_factor) const;
     [[nodiscard]] std::size_t NodeCount() const;
+    [[nodiscard]] std::size_t SlotCount() const;
 
 private:
     [[nodiscard]] static std::uint64_t HashValue(const std::string& value);
+    [[nodiscard]] std::uint32_t SlotFor(const std::string& collection, const std::string& key) const;
 
     std::string local_node_id_;
     std::size_t virtual_nodes_;
+    std::size_t slot_count_;
     mutable std::shared_mutex mutex_;
     std::vector<ClusterNode> nodes_;
     std::map<std::uint64_t, std::size_t> ring_;

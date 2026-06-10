@@ -25,6 +25,9 @@ int main() {
     kvai::core::WriteAheadKvStore store((temp_dir / "store.wal").string(), (temp_dir / "store.snapshot").string());
 
     kvai::core::DocumentRecord record{"documents", "doc-1", "Test title", "Test body", {{"team", "search"}}};
+    record.version = 10;
+    record.updated_at_unix_ms = 10;
+    record.mutation_id = "mutation-10";
 
     if (!Expect(store.Put(record).ok(), "put failed")) {
         return 1;
@@ -43,6 +46,25 @@ int main() {
         return 1;
     }
     if (!Expect(loaded.value().title == "Test title", "loaded title mismatch")) {
+        return 1;
+    }
+    if (!Expect(loaded.value().version == 10 && loaded.value().mutation_id == "mutation-10", "loaded mutation metadata mismatch")) {
+        return 1;
+    }
+    kvai::core::DocumentRecord stale = record;
+    stale.body = "stale";
+    stale.version = 9;
+    stale.mutation_id = "mutation-9";
+    if (!Expect(!recovered.Put(stale).ok(), "stale mutation should be rejected")) {
+        return 1;
+    }
+    kvai::core::DocumentRecord duplicate = record;
+    duplicate.body = "duplicate retry";
+    if (!Expect(recovered.Put(duplicate).ok(), "duplicate mutation should be idempotent")) {
+        return 1;
+    }
+    auto after_duplicate = recovered.Get("documents", "doc-1");
+    if (!Expect(after_duplicate.ok() && after_duplicate.value().body == "Test body", "duplicate mutation should not overwrite")) {
         return 1;
     }
 

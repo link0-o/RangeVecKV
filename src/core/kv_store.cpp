@@ -84,7 +84,7 @@ std::map<std::string, std::string> DeserializeMetadata(const std::string& encode
 
 kvai::infra::StatusOr<DocumentRecord> DeserializeRecord(const std::string& encoded) {
     const auto parts = SplitEscaped(encoded, '|');
-    if (parts.size() != 5) {
+    if (parts.size() != 5 && parts.size() != 8) {
         return kvai::infra::Status::Internal("malformed record serialization");
     }
 
@@ -94,7 +94,26 @@ kvai::infra::StatusOr<DocumentRecord> DeserializeRecord(const std::string& encod
     record.title = Unescape(parts[2]);
     record.body = Unescape(parts[3]);
     record.metadata = DeserializeMetadata(parts[4]);
+    if (parts.size() == 8) {
+        record.version = static_cast<std::uint64_t>(std::stoull(parts[5]));
+        record.updated_at_unix_ms = static_cast<std::int64_t>(std::stoll(parts[6]));
+        record.mutation_id = Unescape(parts[7]);
+    }
     return record;
+}
+
+bool IsDuplicateMutation(const DocumentRecord& existing, const DocumentRecord& incoming) {
+    return !incoming.mutation_id.empty() && existing.mutation_id == incoming.mutation_id;
+}
+
+kvai::infra::Status ValidateMutation(const DocumentRecord& existing, const DocumentRecord& incoming) {
+    if (IsDuplicateMutation(existing, incoming)) {
+        return kvai::infra::Status::Ok();
+    }
+    if (incoming.version != 0 && existing.version != 0 && incoming.version < existing.version) {
+        return kvai::infra::Status::InvalidArgument("stale document mutation: incoming version is older than stored version");
+    }
+    return kvai::infra::Status::Ok();
 }
 
 [[maybe_unused]] kvai::infra::StatusOr<DocumentRecord> DecodeStoredRecord(const std::string& encoded) {
@@ -203,6 +222,23 @@ public:
         if (cf == nullptr) {
             return kvai::infra::Status::Internal("failed to get column family for collection: " + record.collection);
         }
+        std::string existing_value;
+        const auto existing_status = db_->Get(rocksdb::ReadOptions(), cf, record.key, &existing_value);
+        if (existing_status.ok()) {
+            auto existing = DecodeStoredRecord(existing_value);
+            if (!existing.ok()) {
+                return existing.status();
+            }
+            const auto mutation_status = ValidateMutation(existing.value(), record);
+            if (!mutation_status.ok()) {
+                return mutation_status;
+            }
+            if (IsDuplicateMutation(existing.value(), record)) {
+                return kvai::infra::Status::Ok();
+            }
+        } else if (!existing_status.IsNotFound()) {
+            return kvai::infra::Status::Internal("rocksdb get-before-put failed: " + existing_status.ToString());
+        }
         const auto status = db_->Put(rocksdb::WriteOptions(), cf, record.key, persistence::EncodeDocumentRecord(record));
         return status.ok() ? kvai::infra::Status::Ok() : kvai::infra::Status::Internal("rocksdb put failed: " + status.ToString());
     }
@@ -216,6 +252,23 @@ public:
             auto* cf = GetOrCreateColumnFamily(record.collection);
             if (cf == nullptr) {
                 return kvai::infra::Status::Internal("failed to get column family for collection: " + record.collection);
+            }
+            std::string existing_value;
+            const auto existing_status = db_->Get(rocksdb::ReadOptions(), cf, record.key, &existing_value);
+            if (existing_status.ok()) {
+                auto existing = DecodeStoredRecord(existing_value);
+                if (!existing.ok()) {
+                    return existing.status();
+                }
+                const auto mutation_status = ValidateMutation(existing.value(), record);
+                if (!mutation_status.ok()) {
+                    return mutation_status;
+                }
+                if (IsDuplicateMutation(existing.value(), record)) {
+                    continue;
+                }
+            } else if (!existing_status.IsNotFound()) {
+                return kvai::infra::Status::Internal("rocksdb get-before-batch-put failed: " + existing_status.ToString());
             }
             batch.Put(cf, record.key, persistence::EncodeDocumentRecord(record));
         }
@@ -414,7 +467,18 @@ kvai::infra::Status WriteAheadKvStore::Recover() {
 
 kvai::infra::Status WriteAheadKvStore::Put(const DocumentRecord& record) {
     std::lock_guard<std::mutex> lock(mutex_);
-    records_[BuildCompositeKey(record.collection, record.key)] = record;
+    const auto composite_key = BuildCompositeKey(record.collection, record.key);
+    const auto existing = records_.find(composite_key);
+    if (existing != records_.end()) {
+        const auto mutation_status = ValidateMutation(existing->second, record);
+        if (!mutation_status.ok()) {
+            return mutation_status;
+        }
+        if (IsDuplicateMutation(existing->second, record)) {
+            return kvai::infra::Status::Ok();
+        }
+    }
+    records_[composite_key] = record;
     return AppendWalLocked('P', record);
 }
 

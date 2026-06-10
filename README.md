@@ -136,7 +136,9 @@ When `cluster.discovery_backend=etcd`, each node registers a lease-backed key un
 
 Older `host:port` values remain readable. Prefix watching uses an explicit range over the configured prefix; watch disconnects are reloaded and reconnected with backoff. Keepalive/watch state is exposed in `/healthz` through `etcd_discovery_*` fields.
 
-Optional data migration is available through `cluster.data_migration_enabled=true`. When enabled, ring changes trigger an asynchronous best-effort scan: records that now belong to a remote owner are sent to that owner through the internal `/internal/migration/records` endpoint, then kept locally until `cluster.migration_delete_delay_ms` expires. This is eventual consistency, not Raft/quorum replication. Ordinary client writes are still not remote-forwarded; remote-owner writes return `Unavailable` with the target node endpoint.
+Optional data migration is available through `cluster.data_migration_enabled=true`. When enabled, ring changes trigger an asynchronous best-effort scan: records that now belong to a remote owner are sent to that owner through the internal `/internal/migration/records` endpoint, then kept locally until `cluster.migration_delete_delay_ms` expires. Migration tasks are persisted in `cluster.migration_task_wal_path`, and routing now maps `collection:key` to a fixed slot before resolving the slot owner; `/v1/router` returns `slot_id`. This is eventual consistency, not Raft/quorum replication. Ordinary client writes are still not remote-forwarded; remote-owner writes return `Unavailable` with the target node endpoint.
+
+Semantic writes use a KV/vector-index compensation outbox. The document is first persisted in KV, then an index task is written to `search.vector_index_outbox_path`; a background worker generates embeddings and updates the vector index, keeping failed tasks for retry. Records carry `version`, `updated_at_unix_ms` and `mutation_id`, so stale mutations are rejected and repeated mutation IDs are idempotent. P1/P2 follow-up production work is tracked in `docs/production_backlog.md`.
 
 ## API Examples
 

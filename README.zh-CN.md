@@ -80,7 +80,9 @@ docker compose up --build -d
 
 旧的 `host:port` value 仍然兼容可读。prefix watch 使用明确的 range/prefix 语义，监听配置前缀下的所有节点 key；watch 断开后会重新拉取全量节点并带退避重连。keepalive 和 watch 状态会通过 `/healthz` 的 `etcd_discovery_*` 字段暴露。
 
-可通过 `cluster.data_migration_enabled=true` 开启异步数据迁移。开启后，ring 变化会触发本地 KV 扫描：如果某条记录的新 owner 已经不是本节点，就通过内部 `/internal/migration/records` 接口发送到目标 owner；目标写入成功后，源节点会保留到 `cluster.migration_delete_delay_ms` 到期再清理。这是最终一致的 best-effort 迁移，不是 Raft/quorum 强一致复制。普通客户端写入仍不会自动远程转发，owner 是远端节点时仍返回 `Unavailable` 并带目标 endpoint。
+可通过 `cluster.data_migration_enabled=true` 开启异步数据迁移。开启后，ring 变化会触发本地 KV 扫描：如果某条记录的新 owner 已经不是本节点，就通过内部 `/internal/migration/records` 接口发送到目标 owner；目标写入成功后，源节点会保留到 `cluster.migration_delete_delay_ms` 到期再清理。迁移任务会写入 `cluster.migration_task_wal_path`，重启后可恢复 pending/delete_pending 状态并继续扫描兜底。路由先计算固定 slot，再把 slot 映射到 owner，`/v1/router` 会返回 `slot_id`。这是最终一致的 best-effort 迁移，不是 Raft/quorum 强一致复制。普通客户端写入仍不会自动远程转发，owner 是远端节点时仍返回 `Unavailable` 并带目标 endpoint。
+
+语义写入采用 KV 与向量索引补偿模式：文档先写入 KV，并把待建索引任务持久化到 `search.vector_index_outbox_path`；后台 outbox 负责生成 embedding 并更新向量索引，失败任务保留并重试。每条记录携带 `version`、`updated_at_unix_ms` 和 `mutation_id`，KV 层会拒绝旧版本覆盖，相同 `mutation_id` 的重放视为幂等成功。P1/P2 后续生产增强清单见 `docs/production_backlog.md`。
 
 ## API 示例
 

@@ -14,6 +14,9 @@ kvai::v1::DocumentRecord ToProto(const DocumentRecord& record) {
     proto.set_key(record.key);
     proto.set_title(record.title);
     proto.set_body(record.body);
+    proto.set_version(record.version);
+    proto.set_updated_at_unix_ms(record.updated_at_unix_ms);
+    proto.set_mutation_id(record.mutation_id);
     auto* metadata = proto.mutable_metadata();
     for (const auto& [key, value] : record.metadata) {
         (*metadata)[key] = value;
@@ -27,6 +30,9 @@ DocumentRecord FromProto(const kvai::v1::DocumentRecord& proto) {
     record.key = proto.key();
     record.title = proto.title();
     record.body = proto.body();
+    record.version = proto.version();
+    record.updated_at_unix_ms = proto.updated_at_unix_ms();
+    record.mutation_id = proto.mutation_id();
     for (const auto& [key, value] : proto.metadata()) {
         record.metadata[key] = value;
     }

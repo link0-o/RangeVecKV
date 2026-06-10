@@ -105,6 +105,8 @@ int main() {
     config.wal_path = (temp_dir / "gateway.wal").string();
     config.snapshot_path = (temp_dir / "gateway.snapshot").string();
     config.index_path = (temp_dir / "gateway.index").string();
+    config.vector_index_outbox_path = (temp_dir / "gateway.outbox").string();
+    config.migration_task_wal_path = (temp_dir / "gateway-migration.json").string();
 
     kvai::gateway::HttpGatewayRuntime runtime(config);
     auto start_status = runtime.Start();
@@ -226,6 +228,8 @@ int main() {
     source_config.wal_path = (temp_dir / "source.wal").string();
     source_config.snapshot_path = (temp_dir / "source.snapshot").string();
     source_config.index_path = (temp_dir / "source.index").string();
+    source_config.vector_index_outbox_path = (temp_dir / "source.outbox").string();
+    source_config.migration_task_wal_path = (temp_dir / "source-migration.json").string();
 
     kvai::gateway::InProcessGatewayServer source_server(source_config);
     if (!Expect(source_server.Start().ok(), "source migration server start failed")) {

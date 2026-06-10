@@ -8,6 +8,8 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <sstream>
 
 #include <nlohmann/json.hpp>
@@ -96,6 +98,28 @@ kvai::infra::Status SendHttpPost(const std::string& host,
     return kvai::infra::Status::Ok();
 }
 
+kvai::infra::Status EnsureParentDirectory(const std::string& path) {
+    const auto parent = std::filesystem::path(path).parent_path();
+    if (parent.empty()) {
+        return kvai::infra::Status::Ok();
+    }
+    std::error_code error;
+    std::filesystem::create_directories(parent, error);
+    if (error) {
+        return kvai::infra::Status::Internal("failed to create migration task wal directory: " + error.message());
+    }
+    return kvai::infra::Status::Ok();
+}
+
+std::chrono::steady_clock::time_point SteadyFromUnixMillis(std::int64_t unix_ms) {
+    const auto now_unix = UnixMillis();
+    const auto now_steady = std::chrono::steady_clock::now();
+    if (unix_ms <= now_unix) {
+        return now_steady;
+    }
+    return now_steady + std::chrono::milliseconds(unix_ms - now_unix);
+}
+
 }  // namespace
 
 DataMigrationManager::DataMigrationManager(kvai::infra::ServerConfig config,
@@ -128,6 +152,11 @@ void DataMigrationManager::Start() {
     running_ = true;
     status_.enabled = true;
     status_.state = "idle";
+    auto recover_status = RecoverTasksLocked();
+    if (!recover_status.ok()) {
+        status_.state = "degraded";
+        status_.last_error = recover_status.ToString();
+    }
     worker_ = std::thread([this]() { WorkerLoop(); });
 }
 
@@ -214,6 +243,9 @@ void DataMigrationManager::ScanOnce() {
                 task.record = record;
                 task.target = route.primary;
                 task.semantic = IsSemanticRecord(record);
+                task.migration_epoch = UnixMillis();
+                task.delete_after_unix_ms = task.migration_epoch +
+                                            static_cast<std::int64_t>(config_.migration_delete_delay_ms);
                 task.delete_after = std::chrono::steady_clock::now() +
                                     std::chrono::milliseconds(config_.migration_delete_delay_ms);
 
@@ -221,6 +253,11 @@ void DataMigrationManager::ScanOnce() {
                 std::lock_guard<std::mutex> lock(mutex_);
                 if (pending_.find(key) == pending_.end()) {
                     pending_.emplace(key, std::move(task));
+                    auto persist_status = PersistTasksLocked();
+                    if (!persist_status.ok()) {
+                        status_.state = "degraded";
+                        status_.last_error = persist_status.ToString();
+                    }
                 }
             }
 
@@ -274,6 +311,8 @@ void DataMigrationManager::ScanOnce() {
             }
             if (status.ok()) {
                 ++status_.succeeded;
+                task.delete_after_unix_ms = UnixMillis() + static_cast<std::int64_t>(config_.migration_delete_delay_ms);
+                task.delete_after = SteadyFromUnixMillis(task.delete_after_unix_ms);
                 delayed_delete_.push_back(task);
                 pending_.erase(iterator);
             } else {
@@ -285,6 +324,11 @@ void DataMigrationManager::ScanOnce() {
                 } else {
                     status_.last_error = status.ToString();
                 }
+            }
+            auto persist_status = PersistTasksLocked();
+            if (!persist_status.ok()) {
+                status_.state = "degraded";
+                status_.last_error = persist_status.ToString();
             }
         }
     }
@@ -314,6 +358,14 @@ void DataMigrationManager::ProcessDueDeletes() {
             RecordError(status);
         }
     }
+    if (!due.empty()) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto persist_status = PersistTasksLocked();
+        if (!persist_status.ok()) {
+            status_.state = "degraded";
+            status_.last_error = persist_status.ToString();
+        }
+    }
 }
 
 kvai::infra::Status DataMigrationManager::MigrateTask(Task& task) {
@@ -335,6 +387,117 @@ kvai::infra::Status DataMigrationManager::DeleteLocalIfStillRemote(const Task& t
     if (task.semantic) {
         return vector_index_.Remove(task.record.collection, task.record.key);
     }
+    return kvai::infra::Status::Ok();
+}
+
+kvai::infra::Status DataMigrationManager::RecoverTasksLocked() {
+    std::ifstream input(config_.migration_task_wal_path);
+    if (!input.is_open()) {
+        return kvai::infra::Status::Ok();
+    }
+
+    nlohmann::json root = nlohmann::json::parse(input, nullptr, false);
+    if (root.is_discarded()) {
+        return kvai::infra::Status::Internal("failed to parse migration task wal");
+    }
+    if (!root.is_array()) {
+        return kvai::infra::Status::InvalidArgument("migration task wal must contain a JSON array");
+    }
+
+    pending_.clear();
+    delayed_delete_.clear();
+    for (const auto& item : root) {
+        if (!item.is_object()) {
+            continue;
+        }
+
+        Task task;
+        task.record.collection = item.value("collection", "");
+        task.record.key = item.value("key", "");
+        task.record.title = item.value("title", "");
+        task.record.body = item.value("body", "");
+        if (item.contains("metadata") && item["metadata"].is_object()) {
+            for (auto& [key, value] : item["metadata"].items()) {
+                if (value.is_string()) {
+                    task.record.metadata[key] = value.get<std::string>();
+                }
+            }
+        }
+        task.record.version = item.value("version", static_cast<std::uint64_t>(0));
+        task.record.updated_at_unix_ms = item.value("updated_at_unix_ms", static_cast<std::int64_t>(0));
+        task.record.mutation_id = item.value("mutation_id", "");
+        task.target.id = item.value("target_id", "");
+        task.target.host = item.value("target_host", "");
+        task.target.port = static_cast<std::uint16_t>(item.value("target_port", 0));
+        task.target.healthy = item.value("target_healthy", true);
+        task.target.weight = item.value("target_weight", 100U);
+        task.target.zone = item.value("target_zone", "");
+        task.semantic = item.value("semantic", false);
+        task.attempts = item.value("attempts", static_cast<std::size_t>(0));
+        task.migration_epoch = item.value("migration_epoch", static_cast<std::int64_t>(0));
+        task.delete_after_unix_ms = item.value("delete_after_unix_ms", static_cast<std::int64_t>(0));
+        task.delete_after = SteadyFromUnixMillis(task.delete_after_unix_ms);
+
+        if (task.record.collection.empty() || task.record.key.empty()) {
+            continue;
+        }
+        const auto state = item.value("state", "pending");
+        if (state == "delete_pending") {
+            delayed_delete_.push_back(std::move(task));
+        } else {
+            pending_[TaskKey(task.record)] = std::move(task);
+        }
+    }
+
+    status_.pending = pending_.size();
+    status_.delayed_delete = delayed_delete_.size();
+    return kvai::infra::Status::Ok();
+}
+
+kvai::infra::Status DataMigrationManager::PersistTasksLocked() const {
+    auto status = EnsureParentDirectory(config_.migration_task_wal_path);
+    if (!status.ok()) {
+        return status;
+    }
+
+    nlohmann::json root = nlohmann::json::array();
+    auto append_task = [&root](const Task& task, const char* state) {
+        nlohmann::json item;
+        item["state"] = state;
+        item["collection"] = task.record.collection;
+        item["key"] = task.record.key;
+        item["title"] = task.record.title;
+        item["body"] = task.record.body;
+        item["metadata"] = task.record.metadata;
+        item["version"] = task.record.version;
+        item["updated_at_unix_ms"] = task.record.updated_at_unix_ms;
+        item["mutation_id"] = task.record.mutation_id;
+        item["target_id"] = task.target.id;
+        item["target_host"] = task.target.host;
+        item["target_port"] = task.target.port;
+        item["target_healthy"] = task.target.healthy;
+        item["target_weight"] = task.target.weight;
+        item["target_zone"] = task.target.zone;
+        item["semantic"] = task.semantic;
+        item["attempts"] = task.attempts;
+        item["migration_epoch"] = task.migration_epoch;
+        item["delete_after_unix_ms"] = task.delete_after_unix_ms;
+        root.push_back(std::move(item));
+    };
+
+    for (const auto& [_, task] : pending_) {
+        (void)_;
+        append_task(task, "pending");
+    }
+    for (const auto& task : delayed_delete_) {
+        append_task(task, "delete_pending");
+    }
+
+    std::ofstream output(config_.migration_task_wal_path, std::ios::trunc);
+    if (!output.is_open()) {
+        return kvai::infra::Status::Internal("failed to open migration task wal");
+    }
+    output << root.dump(2);
     return kvai::infra::Status::Ok();
 }
 
@@ -364,8 +527,11 @@ kvai::infra::Status DataMigrationManager::PostMigrationRecord(const Task& task) 
     body["title"] = task.record.title;
     body["body"] = task.record.body;
     body["metadata"] = task.record.metadata;
+    body["version"] = task.record.version;
+    body["updated_at_unix_ms"] = task.record.updated_at_unix_ms;
+    body["mutation_id"] = task.record.mutation_id;
     body["semantic"] = task.semantic;
-    body["migration_epoch"] = UnixMillis();
+    body["migration_epoch"] = task.migration_epoch == 0 ? UnixMillis() : task.migration_epoch;
 
     std::vector<std::string> headers = {"x-kvai-internal-migration: 1"};
     if (!config_.api_key.empty()) {

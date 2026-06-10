@@ -38,6 +38,9 @@ message DocumentRecord {
   string title = 3;
   string body = 4;
   map<string, string> metadata = 5;
+  uint64 version = 6;
+  int64 updated_at_unix_ms = 7;
+  string mutation_id = 8;
 }
 
 enum WalOperation {

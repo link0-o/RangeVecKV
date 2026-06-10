@@ -73,6 +73,83 @@ jobs:
           name: rangeveckv-install
           path: dist/install/**
 
+  docker-smoke:
+    name: Docker compose smoke
+    runs-on: ubuntu-24.04
+    needs: local-build-test
+
+    steps:
+      - name: Free runner disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          docker system prune -af || true
+          df -h
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Prepare smoke environment
+        run: |
+          printf '%s\n' \
+            'KVAI_API_KEY=ci-smoke-secret' \
+            'KVAI_DISCOVERY_BACKEND=etcd' \
+            'KVAI_ETCD_ENDPOINTS=http://etcd:2379' \
+            'KVAI_ADVERTISE_HOST=rangeveckv' \
+            'KVAI_NODE_WEIGHT=100' \
+            'KVAI_NODE_ZONE=ci' \
+            'KVAI_DATA_MIGRATION_ENABLED=false' \
+            'KVAI_MIGRATION_DELETE_DELAY_MS=300000' \
+            'KVAI_CLUSTER_SLOT_COUNT=4096' \
+            'KVAI_CLUSTER_NODES=node-local@127.0.0.1:8080' \
+            'KVAI_TLS_MODE=disabled' \
+            'KVAI_AI_BACKEND=deterministic' \
+            'KVAI_MODEL_PATH=/opt/rangeveckv/models/chinese-clip-vit-base-patch16/model_quantized.onnx' \
+            'KVAI_TOKENIZER_PATH=/opt/rangeveckv/models/chinese-clip-vit-base-patch16/vocab.txt' \
+            > .env
+          mkdir -p data logs models images docker/empty-vcpkg-cache
+
+      - name: Build fallback Docker image
+        env:
+          KVAI_DOCKER_OPTIONAL_BACKENDS: "OFF"
+        run: docker compose build rangeveckv
+
+      - name: Start stack
+        env:
+          KVAI_DOCKER_OPTIONAL_BACKENDS: "OFF"
+        run: docker compose up -d etcd rangeveckv
+
+      - name: Wait for health
+        run: |
+          for attempt in $(seq 1 90); do
+            status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' rangeveckv 2>/dev/null || true)"
+            if [ "$status" = "healthy" ]; then
+              exit 0
+            fi
+            if [ "$status" = "unhealthy" ] || [ "$status" = "exited" ] || [ "$status" = "dead" ]; then
+              docker compose logs --tail=200 rangeveckv
+              exit 1
+            fi
+            sleep 2
+          done
+          docker compose logs --tail=200 rangeveckv
+          exit 1
+
+      - name: HTTP smoke
+        env:
+          KVAI_API_KEY: ci-smoke-secret
+        run: ./scripts/http_smoke.sh http://127.0.0.1:8080
+
+      - name: Compose logs on failure
+        if: failure()
+        run: docker compose logs --tail=300
+
+      - name: Stop stack
+        if: always()
+        run: docker compose down -v
+
   package:
     name: Package fallback build
     runs-on: ubuntu-24.04
@@ -137,6 +214,9 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+
+      - name: Prepare Docker build context
+        run: mkdir -p docker/empty-vcpkg-cache
 
       - name: Build production image
         uses: docker/build-push-action@v6

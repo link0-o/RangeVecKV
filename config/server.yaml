@@ -20,6 +20,7 @@ search:
   max_top_k: 20
   backend: auto
   index_path: ./data/kvai.index
+  vector_index_outbox_path: ./data/vector_index_outbox.wal
 
 storage:
   default_collection: documents
@@ -40,6 +41,8 @@ cluster:
   migration_delete_delay_ms: 300000
   migration_batch_size: 100
   migration_max_retries: 5
+  migration_task_wal_path: ./data/migration_tasks.wal
+  slot_count: 4096
   nodes: node-local@127.0.0.1:8080
   etcd_endpoints: http://127.0.0.1:2379
   etcd_prefix: /rangeveckv/nodes/

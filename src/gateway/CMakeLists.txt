@@ -6,7 +6,8 @@ set(KVAI_GATEWAY_SOURCES
     interceptors.cpp
     json_helpers.cpp
     semantic_search_service.cpp
-    server.cpp)
+    server.cpp
+    vector_index_outbox.cpp)
 
 # nlohmann-json: proper JSON serialization/deserialization
 set(KVAI_VCPKG_SHARE_DIR "")

@@ -52,6 +52,8 @@ private:
         kvai::infra::ClusterNode target;
         bool semantic = false;
         std::size_t attempts = 0;
+        std::int64_t migration_epoch = 0;
+        std::int64_t delete_after_unix_ms = 0;
         std::chrono::steady_clock::time_point delete_after;
     };
 
@@ -60,6 +62,8 @@ private:
     void ProcessDueDeletes();
     kvai::infra::Status MigrateTask(Task& task);
     kvai::infra::Status DeleteLocalIfStillRemote(const Task& task);
+    kvai::infra::Status RecoverTasksLocked();
+    kvai::infra::Status PersistTasksLocked() const;
     [[nodiscard]] bool IsSemanticRecord(const kvai::core::DocumentRecord& record) const;
     [[nodiscard]] std::string TaskKey(const kvai::core::DocumentRecord& record) const;
     [[nodiscard]] kvai::infra::Status PostMigrationRecord(const Task& task) const;

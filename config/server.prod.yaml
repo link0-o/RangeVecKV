@@ -22,6 +22,7 @@ search:
   max_top_k: 50
   backend: auto
   index_path: /opt/rangeveckv/data/kvai-cnclip.index
+  vector_index_outbox_path: /opt/rangeveckv/data/vector_index_outbox.wal
 
 storage:
   default_collection: documents
@@ -43,6 +44,8 @@ cluster:
   migration_delete_delay_ms: ${KVAI_MIGRATION_DELETE_DELAY_MS}
   migration_batch_size: 100
   migration_max_retries: 5
+  migration_task_wal_path: /opt/rangeveckv/data/migration_tasks.wal
+  slot_count: ${KVAI_CLUSTER_SLOT_COUNT}
   nodes: ${KVAI_CLUSTER_NODES}
   etcd_endpoints: ${KVAI_ETCD_ENDPOINTS}
   etcd_prefix: /rangeveckv/nodes/

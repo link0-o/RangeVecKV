@@ -25,6 +25,8 @@ int main() {
     config.snapshot_path = (temp_dir / "gateway.snapshot").string();
     config.db_path = (temp_dir / "rocksdb").string();
     config.index_path = (temp_dir / "gateway.index").string();
+    config.vector_index_outbox_path = (temp_dir / "gateway.outbox").string();
+    config.migration_task_wal_path = (temp_dir / "migration_tasks.json").string();
     config.default_collection = "documents";
     config.embedding_dimensions = 32;
     config.worker_threads = 2;
@@ -65,6 +67,9 @@ int main() {
         return 1;
     }
     if (!Expect(report.details.find("data_migration_state") != report.details.end(), "health details missing migration state")) {
+        return 1;
+    }
+    if (!Expect(report.details.find("vector_index_outbox_state") != report.details.end(), "health details missing vector outbox state")) {
         return 1;
     }
 
@@ -148,6 +153,8 @@ int main() {
     remote_config.snapshot_path = (temp_dir / "remote.snapshot").string();
     remote_config.db_path = (temp_dir / "remote-rocksdb").string();
     remote_config.index_path = (temp_dir / "remote.index").string();
+    remote_config.vector_index_outbox_path = (temp_dir / "remote.outbox").string();
+    remote_config.migration_task_wal_path = (temp_dir / "remote-migration.json").string();
     remote_config.enable_demo_data = false;
     remote_config.node_id = "local-node";
     remote_config.cluster_nodes = "remote-node@10.0.0.2:9090";

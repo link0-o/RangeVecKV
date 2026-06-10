@@ -83,6 +83,11 @@ KVAI_API_KEY=${API_KEY}
 KVAI_DISCOVERY_BACKEND=etcd
 KVAI_ETCD_ENDPOINTS=http://etcd:2379
 KVAI_ADVERTISE_HOST=rangeveckv
+KVAI_NODE_WEIGHT=100
+KVAI_NODE_ZONE=default
+KVAI_DATA_MIGRATION_ENABLED=false
+KVAI_MIGRATION_DELETE_DELAY_MS=300000
+KVAI_CLUSTER_SLOT_COUNT=4096
 KVAI_CLUSTER_NODES=node-local@127.0.0.1:8080
 KVAI_TLS_MODE=disabled
 KVAI_AI_BACKEND=onnxruntime
@@ -106,6 +111,21 @@ fi
 if ! grep -q '^KVAI_ADVERTISE_HOST=' .env; then
     printf 'KVAI_ADVERTISE_HOST=rangeveckv\n' >>.env
 fi
+if ! grep -q '^KVAI_NODE_WEIGHT=' .env; then
+    printf 'KVAI_NODE_WEIGHT=100\n' >>.env
+fi
+if ! grep -q '^KVAI_NODE_ZONE=' .env; then
+    printf 'KVAI_NODE_ZONE=default\n' >>.env
+fi
+if ! grep -q '^KVAI_DATA_MIGRATION_ENABLED=' .env; then
+    printf 'KVAI_DATA_MIGRATION_ENABLED=false\n' >>.env
+fi
+if ! grep -q '^KVAI_MIGRATION_DELETE_DELAY_MS=' .env; then
+    printf 'KVAI_MIGRATION_DELETE_DELAY_MS=300000\n' >>.env
+fi
+if ! grep -q '^KVAI_CLUSTER_SLOT_COUNT=' .env; then
+    printf 'KVAI_CLUSTER_SLOT_COUNT=4096\n' >>.env
+fi
 if ! grep -q '^KVAI_AI_BACKEND=' .env; then
     printf 'KVAI_AI_BACKEND=onnxruntime\n' >>.env
 fi
@@ -123,11 +143,13 @@ if [[ -d "${TARGET_HOME}/.cache/vcpkg/archives" ]] && ! grep -q '^VCPKG_BINARY_C
 fi
 "${SUDO[@]}" chown "${TARGET_USER}:$(id -gn "${TARGET_USER}")" .env
 
-mkdir -p data images
+mkdir -p data logs images
 
 if [[ ! -f models/chinese-clip-vit-base-patch16/model_quantized.onnx || ! -f models/chinese-clip-vit-base-patch16/vocab.txt ]]; then
     ./scripts/download_ai_model.sh
 fi
+"${SUDO[@]}" chown -R "${TARGET_USER}:$(id -gn "${TARGET_USER}")" data
+"${SUDO[@]}" chown -R "${TARGET_USER}:$(id -gn "${TARGET_USER}")" logs
 "${SUDO[@]}" chown -R "${TARGET_USER}:$(id -gn "${TARGET_USER}")" models
 "${SUDO[@]}" chown -R "${TARGET_USER}:$(id -gn "${TARGET_USER}")" images
 

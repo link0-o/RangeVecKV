@@ -141,9 +141,21 @@ Set `cluster.data_migration_enabled=true` to enable asynchronous data
 migration after ring rebuilds. A node scans local KV collections, sends records
 that now belong to a remote owner to `/internal/migration/records` on that owner,
 and keeps the source copy until `cluster.migration_delete_delay_ms` expires.
+Pending and delayed-delete tasks are persisted in
+`cluster.migration_task_wal_path`, so a restart can recover task state and then
+rescan local KV data as a safety net. Routing first maps `collection:key` to a
+fixed slot (`cluster.slot_count`) and then resolves the slot owner from the
+consistent-hash ring; `/v1/router` exposes `slot_id`.
 Migration is best-effort and eventually consistent; it is not a Raft/quorum
 replication protocol. Remote-owner write forwarding for ordinary client requests
 is still disabled, so those writes return `Unavailable` with the owner endpoint.
+
+Semantic document writes use a persistent vector index outbox. KV is updated
+first, then the pending index task is written to
+`search.vector_index_outbox_path`; a background worker computes embeddings and
+updates the vector index. Failed tasks remain pending for retry. Record
+`version`, `updated_at_unix_ms`, and `mutation_id` fields provide stale-write
+rejection and idempotent retries.
 
 Fallback mode is intentionally retained so local build/test is not blocked by large production dependencies. It should not be described as the final production performance profile.
 

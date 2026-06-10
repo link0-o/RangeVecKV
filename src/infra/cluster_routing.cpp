@@ -54,8 +54,10 @@ StatusOr<std::vector<ClusterNode>> ParseStaticClusterNodes(const std::string& en
     return nodes;
 }
 
-ConsistentHashRouter::ConsistentHashRouter(std::string local_node_id, std::size_t virtual_nodes)
-    : local_node_id_(std::move(local_node_id)), virtual_nodes_(std::max<std::size_t>(1, virtual_nodes)) {}
+ConsistentHashRouter::ConsistentHashRouter(std::string local_node_id, std::size_t virtual_nodes, std::size_t slot_count)
+    : local_node_id_(std::move(local_node_id)),
+      virtual_nodes_(std::max<std::size_t>(1, virtual_nodes)),
+      slot_count_(std::max<std::size_t>(1, slot_count)) {}
 
 void ConsistentHashRouter::Rebuild(const std::vector<ClusterNode>& nodes) {
     std::unique_lock<std::shared_mutex> lock(mutex_);
@@ -75,7 +77,8 @@ RouteDecision ConsistentHashRouter::Route(const std::string& collection, const s
         return decision;
     }
 
-    auto iterator = ring_.lower_bound(HashValue(collection + ":" + key));
+    decision.slot_id = SlotFor(collection, key);
+    auto iterator = ring_.lower_bound(HashValue("slot:" + std::to_string(decision.slot_id)));
     if (iterator == ring_.end()) {
         iterator = ring_.begin();
     }
@@ -107,8 +110,16 @@ std::size_t ConsistentHashRouter::NodeCount() const {
     return nodes_.size();
 }
 
+std::size_t ConsistentHashRouter::SlotCount() const {
+    return slot_count_;
+}
+
 std::uint64_t ConsistentHashRouter::HashValue(const std::string& value) {
     return static_cast<std::uint64_t>(std::hash<std::string>{}(value));
+}
+
+std::uint32_t ConsistentHashRouter::SlotFor(const std::string& collection, const std::string& key) const {
+    return static_cast<std::uint32_t>(HashValue(collection + ":" + key) % slot_count_);
 }
 
 }  // namespace kvai::infra

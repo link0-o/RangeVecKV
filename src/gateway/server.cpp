@@ -1,5 +1,6 @@
 #include "gateway/server.h"
 
+#include <atomic>
 #include <chrono>
 #include <fstream>
 
@@ -47,12 +48,33 @@ std::string RemoteOwnerMessage(const char* subject, const kvai::infra::RouteDeci
            (endpoint.empty() ? "" : " endpoint=" + endpoint) + " trace_id=" + trace_id;
 }
 
+std::int64_t UnixMillis() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::system_clock::now().time_since_epoch())
+        .count();
+}
+
+void PrepareMutation(kvai::core::DocumentRecord& record, const std::string& node_id) {
+    static std::atomic<std::uint64_t> counter{0};
+    const auto now = UnixMillis();
+    if (record.updated_at_unix_ms == 0) {
+        record.updated_at_unix_ms = now;
+    }
+    if (record.version == 0) {
+        record.version = static_cast<std::uint64_t>(record.updated_at_unix_ms);
+    }
+    if (record.mutation_id.empty()) {
+        record.mutation_id = node_id + ":" + std::to_string(record.updated_at_unix_ms) + ":" +
+                             std::to_string(counter.fetch_add(1, std::memory_order_relaxed));
+    }
+}
+
 }  // namespace
 
 InProcessGatewayServer::InProcessGatewayServer(kvai::infra::ServerConfig config)
     : config_(std::move(config)),
       thread_pool_(config_.worker_threads),
-            router_(config_.node_id),
+      router_(config_.node_id, 64, config_.cluster_slot_count),
       rate_limiter_(config_.rate_limit_per_second) {}
 
 kvai::infra::Status InProcessGatewayServer::Start() {
@@ -78,6 +100,12 @@ kvai::infra::Status InProcessGatewayServer::Start() {
     kv_store_ = kv_store.ConsumeValue();
     embedding_service_ = embedding_service.ConsumeValue();
     vector_index_ = vector_index.ConsumeValue();
+    vector_outbox_ = std::make_unique<VectorIndexOutbox>(config_, *embedding_service_, *vector_index_);
+    auto outbox_status = vector_outbox_->Recover();
+    if (!outbox_status.ok()) {
+        return outbox_status;
+    }
+    vector_outbox_->Start();
 
     auto nodes = kvai::infra::ParseStaticClusterNodes(config_.cluster_nodes);
     if (!nodes.ok()) {
@@ -119,6 +147,9 @@ kvai::infra::Status InProcessGatewayServer::Start() {
         if (migration_manager_) {
             migration_manager_->Stop();
         }
+        if (vector_outbox_) {
+            vector_outbox_->Stop();
+        }
         return status;
     }
     if (migration_manager_) {
@@ -144,6 +175,10 @@ kvai::infra::Status InProcessGatewayServer::Stop() {
         migration_manager_->Stop();
         migration_manager_.reset();
     }
+    if (vector_outbox_) {
+        vector_outbox_->DrainOnce();
+        vector_outbox_->Stop();
+    }
 
     auto status = kv_store_->FlushSnapshot();
     if (!status.ok()) {
@@ -153,6 +188,7 @@ kvai::infra::Status InProcessGatewayServer::Stop() {
     if (!status.ok()) {
         return status;
     }
+    vector_outbox_.reset();
 
     started_ = false;
     return kvai::infra::Status::Ok();
@@ -200,19 +236,20 @@ kvai::infra::Status InProcessGatewayServer::UpsertDocument(kvai::core::DocumentR
         return kvai::infra::Status::Unavailable(RemoteOwnerMessage("document", route, trace));
     }
 
-    const auto image_reference = ImageReferenceForRecord(record);
-    auto embedding = image_reference.empty()
-                         ? embedding_service_->EmbedText(record.title + " " + record.body)
-                         : embedding_service_->EmbedImage(image_reference);
-    if (!embedding.ok()) {
-        return embedding.status();
-    }
-
+    PrepareMutation(record, config_.node_id);
     auto status = kv_store_->Put(record);
     if (!status.ok()) {
         return status;
     }
-    return vector_index_->Upsert(record, embedding.value().values);
+    if (vector_outbox_ == nullptr) {
+        return kvai::infra::Status::Unavailable("vector index outbox is not initialized");
+    }
+    status = vector_outbox_->Enqueue(record);
+    if (!status.ok()) {
+        return status;
+    }
+    (void)vector_outbox_->DrainOnce();
+    return kvai::infra::Status::Ok();
 }
 
 kvai::infra::Status InProcessGatewayServer::DeleteDocument(std::string collection, std::string key, std::string trace_id) {
@@ -233,6 +270,12 @@ kvai::infra::Status InProcessGatewayServer::DeleteDocument(std::string collectio
         return kvai::infra::Status::Unavailable(RemoteOwnerMessage("document", route, trace));
     }
 
+    if (vector_outbox_) {
+        auto remove_pending = vector_outbox_->Remove(collection, key);
+        if (!remove_pending.ok()) {
+            return remove_pending;
+        }
+    }
     auto status = kv_store_->Delete(collection, key);
     if (!status.ok()) {
         return status;
@@ -258,6 +301,7 @@ kvai::infra::Status InProcessGatewayServer::PutKvRecord(kvai::core::DocumentReco
         return kvai::infra::Status::Unavailable(RemoteOwnerMessage("kv record", route, trace));
     }
 
+    PrepareMutation(record, config_.node_id);
     return kv_store_->Put(record);
 }
 
@@ -327,10 +371,26 @@ kvai::infra::Status InProcessGatewayServer::ApplyMigratedRecord(kvai::core::Docu
     if (record.key.empty()) {
         return kvai::infra::Status::InvalidArgument("migrated record key cannot be empty");
     }
+    PrepareMutation(record, config_.node_id);
     if (!trace_id.empty()) {
         record.metadata["trace_id"] = TraceInjector::EnsureTraceId(trace_id);
     }
-    return kvai::gateway::ApplyMigratedRecord(*kv_store_, *embedding_service_, *vector_index_, record, semantic);
+    auto status = kv_store_->Put(record);
+    if (!status.ok()) {
+        return status;
+    }
+    if (!semantic) {
+        return kvai::infra::Status::Ok();
+    }
+    if (vector_outbox_ == nullptr) {
+        return kvai::infra::Status::Unavailable("vector index outbox is not initialized");
+    }
+    status = vector_outbox_->Enqueue(record);
+    if (!status.ok()) {
+        return status;
+    }
+    (void)vector_outbox_->DrainOnce();
+    return kvai::infra::Status::Ok();
 }
 
 void InProcessGatewayServer::TriggerMigrationScan() {
@@ -341,6 +401,10 @@ void InProcessGatewayServer::TriggerMigrationScan() {
 
 DataMigrationStatus InProcessGatewayServer::MigrationStatus() const {
     return migration_manager_ == nullptr ? DataMigrationStatus{} : migration_manager_->Status();
+}
+
+VectorIndexOutboxStatus InProcessGatewayServer::VectorOutboxStatus() const {
+    return vector_outbox_ == nullptr ? VectorIndexOutboxStatus{} : vector_outbox_->Status();
 }
 
 kvai::infra::Status InProcessGatewayServer::ReindexDocuments(std::string collection) {
@@ -400,6 +464,7 @@ HealthReport InProcessGatewayServer::HealthCheck(std::string trace_id) const {
     report.details.emplace("node_id", config_.node_id);
     report.details.emplace("discovery_backend", config_.discovery_backend);
     report.details.emplace("cluster_node_count", std::to_string(router_.NodeCount()));
+    report.details.emplace("cluster_slot_count", std::to_string(router_.SlotCount()));
     report.details.emplace("read_only_mode", config_.read_only_mode ? "true" : "false");
     report.details.emplace("tls_mode", config_.tls_mode);
     report.details.emplace("cpu_utilization_ratio", std::to_string(kvai::infra::MetricsRegistry::CpuUtilizationRatio()));
@@ -418,6 +483,15 @@ HealthReport InProcessGatewayServer::HealthCheck(std::string trace_id) const {
     if (!migration_status.last_error.empty()) {
         report.details.emplace("data_migration_last_error", migration_status.last_error);
         report.warnings.push_back(migration_status.last_error);
+    }
+    const auto outbox_status = VectorOutboxStatus();
+    report.details.emplace("vector_index_outbox_state", outbox_status.state);
+    report.details.emplace("vector_index_outbox_pending", std::to_string(outbox_status.pending));
+    report.details.emplace("vector_index_outbox_succeeded", std::to_string(outbox_status.succeeded));
+    report.details.emplace("vector_index_outbox_failed", std::to_string(outbox_status.failed));
+    if (!outbox_status.last_error.empty()) {
+        report.details.emplace("vector_index_outbox_last_error", outbox_status.last_error);
+        report.warnings.push_back(outbox_status.last_error);
     }
     report.details.emplace("remote_forwarding_enabled", "false");
     if (discovery_) {
@@ -478,11 +552,14 @@ kvai::infra::Status InProcessGatewayServer::SeedDemoData() {
         return kvai::infra::Status::Ok();
     }
 
-    const std::vector<kvai::core::DocumentRecord> records = {
+    std::vector<kvai::core::DocumentRecord> records = {
         {config_.default_collection, "doc-001", "Distributed KV Engine", "RocksDB inspired durable key value pipeline with write ahead log recovery and range scan support.", {{"domain", "storage"}, {"lang", "cpp"}}},
         {config_.default_collection, "doc-002", "Semantic Retrieval Worker", "Vector search worker converts text into dense embeddings and runs top k retrieval with graceful degradation.", {{"domain", "search"}, {"lang", "cpp"}}},
         {config_.default_collection, "doc-003", "Gateway Observability", "Gateway injects trace identifiers, enforces rate limits and exposes health status for production monitoring.", {{"domain", "gateway"}, {"lang", "cpp"}}},
     };
+    for (auto& record : records) {
+        PrepareMutation(record, config_.node_id);
+    }
 
     auto status = kv_store_->BatchPut(records);
     if (!status.ok()) {
@@ -490,11 +567,14 @@ kvai::infra::Status InProcessGatewayServer::SeedDemoData() {
     }
 
     for (const auto& record : records) {
-        auto embedding = embedding_service_->EmbedText(record.title + " " + record.body);
-        if (!embedding.ok()) {
-            return embedding.status();
+        status = vector_outbox_ == nullptr ? kvai::infra::Status::Unavailable("vector index outbox is not initialized")
+                                           : vector_outbox_->Enqueue(record);
+        if (!status.ok()) {
+            return status;
         }
-        status = vector_index_->Upsert(record, embedding.value().values);
+    }
+    if (vector_outbox_) {
+        status = vector_outbox_->DrainOnce();
         if (!status.ok()) {
             return status;
         }

@@ -31,6 +31,8 @@ struct ServerConfig {
     std::uint64_t migration_delete_delay_ms = 300000;
     std::size_t migration_batch_size = 100;
     std::size_t migration_max_retries = 5;
+    std::string migration_task_wal_path = "./data/migration_tasks.wal";
+    std::size_t cluster_slot_count = 4096;
     bool read_only_mode = false;
     bool enable_demo_data = true;
     bool require_api_key = false;
@@ -44,6 +46,7 @@ struct ServerConfig {
     std::string snapshot_path = "./data/kvai.snapshot";
     std::string db_path = "./data/rocksdb";
     std::string index_path = "./data/kvai.index";
+    std::string vector_index_outbox_path = "./data/vector_index_outbox.wal";
     int search_faiss_nlist = 0;
     int search_faiss_nprobe = 0;
     std::string openapi_path = "./docs/openapi.yaml";

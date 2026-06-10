@@ -198,6 +198,7 @@ ServerConfig LoadNestedConfig(const YAML::Node& root) {
         }
         config.search_backend = ReadString(search, "backend", config.search_backend);
         config.index_path = ReadString(search, "index_path", config.index_path);
+        config.vector_index_outbox_path = ReadString(search, "vector_index_outbox_path", config.vector_index_outbox_path);
         if (search["faiss_nlist"]) {
             config.search_faiss_nlist = search["faiss_nlist"].as<int>();
         }
@@ -239,6 +240,8 @@ ServerConfig LoadNestedConfig(const YAML::Node& root) {
             ReadSize(cluster, "migration_delete_delay_ms", static_cast<std::size_t>(config.migration_delete_delay_ms)));
         config.migration_batch_size = ReadSize(cluster, "migration_batch_size", config.migration_batch_size);
         config.migration_max_retries = ReadSize(cluster, "migration_max_retries", config.migration_max_retries);
+        config.migration_task_wal_path = ReadString(cluster, "migration_task_wal_path", config.migration_task_wal_path);
+        config.cluster_slot_count = ReadSize(cluster, "slot_count", config.cluster_slot_count);
         config.cluster_nodes = ReadString(cluster, "nodes", config.cluster_nodes);
         config.etcd_endpoints = ReadString(cluster, "etcd_endpoints", config.etcd_endpoints);
         config.etcd_prefix = ReadString(cluster, "etcd_prefix", config.etcd_prefix);
@@ -371,6 +374,9 @@ ServerConfig LoadNestedConfig(const YAML::Node& root) {
     if (const auto iterator = values.find("search.index_path"); iterator != values.end()) {
         config.index_path = iterator->second;
     }
+    if (const auto iterator = values.find("search.vector_index_outbox_path"); iterator != values.end()) {
+        config.vector_index_outbox_path = iterator->second;
+    }
     if (const auto iterator = values.find("search.faiss_nlist"); iterator != values.end()) {
         config.search_faiss_nlist = std::stoi(iterator->second);
     }
@@ -409,6 +415,12 @@ ServerConfig LoadNestedConfig(const YAML::Node& root) {
     }
     if (const auto iterator = values.find("cluster.migration_max_retries"); iterator != values.end()) {
         config.migration_max_retries = std::stoul(iterator->second);
+    }
+    if (const auto iterator = values.find("cluster.migration_task_wal_path"); iterator != values.end()) {
+        config.migration_task_wal_path = iterator->second;
+    }
+    if (const auto iterator = values.find("cluster.slot_count"); iterator != values.end()) {
+        config.cluster_slot_count = std::max<std::size_t>(1, std::stoul(iterator->second));
     }
     if (const auto iterator = values.find("cluster.nodes"); iterator != values.end()) {
         config.cluster_nodes = iterator->second;
@@ -555,6 +567,9 @@ StatusOr<ServerConfig> ConfigLoader::LoadFromFile(const std::string& path) {
         if (const auto it = values.find("search.index_path"); it != values.end()) {
             config.index_path = it->second;
         }
+        if (const auto it = values.find("search.vector_index_outbox_path"); it != values.end()) {
+            config.vector_index_outbox_path = it->second;
+        }
         if (const auto it = values.find("cluster.discovery_backend"); it != values.end()) {
             config.discovery_backend = it->second;
         }
@@ -587,6 +602,12 @@ StatusOr<ServerConfig> ConfigLoader::LoadFromFile(const std::string& path) {
         }
         if (const auto it = values.find("cluster.migration_max_retries"); it != values.end()) {
             config.migration_max_retries = std::stoul(it->second);
+        }
+        if (const auto it = values.find("cluster.migration_task_wal_path"); it != values.end()) {
+            config.migration_task_wal_path = it->second;
+        }
+        if (const auto it = values.find("cluster.slot_count"); it != values.end()) {
+            config.cluster_slot_count = std::max<std::size_t>(1, std::stoul(it->second));
         }
         if (const auto it = values.find("cluster.nodes"); it != values.end()) {
             config.cluster_nodes = it->second;

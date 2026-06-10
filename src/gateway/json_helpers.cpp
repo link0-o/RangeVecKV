@@ -40,6 +40,7 @@ nlohmann::json ToJson(const kvai::infra::RouteDecision& route) {
     nlohmann::json j;
     j["has_primary"] = route.has_primary;
     j["local_owner"] = route.local_owner;
+    j["slot_id"] = route.slot_id;
 
     nlohmann::json primary;
     primary["id"] = route.primary.id;
@@ -71,6 +72,9 @@ nlohmann::json ToJson(const kvai::core::DocumentRecord& record) {
     j["body"] = record.body;
     j["value"] = record.body;
     j["metadata"] = record.metadata;
+    j["version"] = record.version;
+    j["updated_at_unix_ms"] = record.updated_at_unix_ms;
+    j["mutation_id"] = record.mutation_id;
     return j;
 }
 
@@ -143,6 +147,15 @@ kvai::infra::StatusOr<kvai::core::DocumentRecord> ParseDocumentUpsert(const nloh
                 record.metadata[key] = value.get<std::string>();
             }
         }
+    }
+    if (j.contains("version") && j["version"].is_number_unsigned()) {
+        record.version = j["version"].get<std::uint64_t>();
+    }
+    if (j.contains("updated_at_unix_ms") && j["updated_at_unix_ms"].is_number_integer()) {
+        record.updated_at_unix_ms = j["updated_at_unix_ms"].get<std::int64_t>();
+    }
+    if (j.contains("mutation_id") && j["mutation_id"].is_string()) {
+        record.mutation_id = j["mutation_id"].get<std::string>();
     }
 
     return record;

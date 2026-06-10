@@ -44,6 +44,9 @@ int main() {
             output << "cluster.migration_delete_delay_ms: 42\n";
             output << "cluster.migration_batch_size: 7\n";
             output << "cluster.migration_max_retries: 3\n";
+            output << "cluster.migration_task_wal_path: /tmp/migration_tasks.wal\n";
+            output << "cluster.slot_count: 128\n";
+            output << "search.vector_index_outbox_path: /tmp/vector_outbox.wal\n";
             output << "cluster.etcd_endpoints: http://etcd:2379\n";
         }
 
@@ -69,6 +72,9 @@ int main() {
             if (!Expect(config.value().migration_delete_delay_ms == 42, "flat: migration_delete_delay_ms not parsed")) ++failures;
             if (!Expect(config.value().migration_batch_size == 7, "flat: migration_batch_size not parsed")) ++failures;
             if (!Expect(config.value().migration_max_retries == 3, "flat: migration_max_retries not parsed")) ++failures;
+            if (!Expect(config.value().migration_task_wal_path == "/tmp/migration_tasks.wal", "flat: migration_task_wal_path not parsed")) ++failures;
+            if (!Expect(config.value().cluster_slot_count == 128, "flat: slot_count not parsed")) ++failures;
+            if (!Expect(config.value().vector_index_outbox_path == "/tmp/vector_outbox.wal", "flat: vector_index_outbox_path not parsed")) ++failures;
             if (!Expect(config.value().etcd_endpoints == "http://etcd:2379", "flat: etcd_endpoints not parsed")) ++failures;
         }
     }
@@ -96,6 +102,7 @@ int main() {
             output << "search:\n";
             output << "  max_top_k: 30\n";
             output << "  backend: brute_force\n";
+            output << "  vector_index_outbox_path: /tmp/vector_outbox_nested.wal\n";
             output << "storage:\n";
             output << "  backend: wal\n";
             output << "  enable_demo_data: false\n";
@@ -109,6 +116,8 @@ int main() {
             output << "  migration_delete_delay_ms: 123\n";
             output << "  migration_batch_size: 9\n";
             output << "  migration_max_retries: 4\n";
+            output << "  migration_task_wal_path: /tmp/migration_tasks_nested.wal\n";
+            output << "  slot_count: 256\n";
             output << "  nodes: ${KVAI_TEST_CLUSTER}\n";
             output << "  etcd_endpoints: http://etcd:2379\n";
             output << "  etcd_lease_ttl_s: 20\n";
@@ -147,6 +156,9 @@ int main() {
             if (!Expect(config.value().migration_delete_delay_ms == 123, "nested: migration_delete_delay_ms not parsed")) ++failures;
             if (!Expect(config.value().migration_batch_size == 9, "nested: migration_batch_size not parsed")) ++failures;
             if (!Expect(config.value().migration_max_retries == 4, "nested: migration_max_retries not parsed")) ++failures;
+            if (!Expect(config.value().migration_task_wal_path == "/tmp/migration_tasks_nested.wal", "nested: migration_task_wal_path not parsed")) ++failures;
+            if (!Expect(config.value().cluster_slot_count == 256, "nested: slot_count not parsed")) ++failures;
+            if (!Expect(config.value().vector_index_outbox_path == "/tmp/vector_outbox_nested.wal", "nested: vector_index_outbox_path not parsed")) ++failures;
             if (!Expect(config.value().etcd_endpoints == "http://etcd:2379", "nested: etcd endpoints not parsed")) ++failures;
             if (!Expect(config.value().etcd_lease_ttl_s == 20, "nested: etcd lease ttl not parsed")) ++failures;
             if (!Expect(config.value().tls_mode == "enabled", "nested: tls_mode not parsed")) ++failures;

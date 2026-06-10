@@ -22,7 +22,7 @@ int main() {
         return 1;
     }
 
-    kvai::infra::ConsistentHashRouter router("node-b");
+    kvai::infra::ConsistentHashRouter router("node-b", 64, 128);
     router.Rebuild(nodes.value());
 
     const auto route = router.Route("documents", "doc-123", 2);
@@ -33,6 +33,13 @@ int main() {
         return 1;
     }
     if (!Expect(!route.primary.id.empty(), "primary node id should not be empty")) {
+        return 1;
+    }
+    if (!Expect(route.slot_id < 128, "route slot should stay within configured slot count")) {
+        return 1;
+    }
+    const auto same_slot_route = router.Route("documents", "doc-123", 2);
+    if (!Expect(same_slot_route.slot_id == route.slot_id, "same key should map to stable slot")) {
         return 1;
     }
 
