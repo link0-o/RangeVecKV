@@ -24,6 +24,8 @@ struct ServerConfig {
     std::string discovery_backend = "static";
     std::string node_id = "node-local";
     std::string advertise_host;
+    std::uint32_t node_weight = 100;
+    std::string node_zone = "default";
     std::size_t replication_factor = 1;
     bool read_only_mode = false;
     bool enable_demo_data = true;

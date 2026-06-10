@@ -38,6 +38,15 @@ std::string ImageReferenceForRecord(const kvai::core::DocumentRecord& record) {
     return {};
 }
 
+std::string RemoteOwnerMessage(const char* subject, const kvai::infra::RouteDecision& route, const std::string& trace_id) {
+    std::string endpoint = route.primary.host;
+    if (route.primary.port != 0) {
+        endpoint += ":" + std::to_string(route.primary.port);
+    }
+    return std::string(subject) + " owned by remote node: " + route.primary.id +
+           (endpoint.empty() ? "" : " endpoint=" + endpoint) + " trace_id=" + trace_id;
+}
+
 }  // namespace
 
 InProcessGatewayServer::InProcessGatewayServer(kvai::infra::ServerConfig config)
@@ -83,6 +92,8 @@ kvai::infra::Status InProcessGatewayServer::Start() {
         local_node.host = config_.advertise_host.empty() ? config_.host : config_.advertise_host;
         local_node.port = config_.port;
         local_node.healthy = true;
+        local_node.weight = config_.node_weight;
+        local_node.zone = config_.node_zone;
 
         discovery_ = std::make_unique<kvai::infra::EtcdServiceDiscovery>(
             config_.etcd_endpoints, config_.etcd_prefix, local_node, config_.etcd_lease_ttl_s);
@@ -168,7 +179,7 @@ kvai::infra::Status InProcessGatewayServer::UpsertDocument(kvai::core::DocumentR
     const auto trace = TraceInjector::EnsureTraceId(trace_id);
     const auto route = DescribeRoute(record.collection, record.key);
     if (route.has_primary && !route.local_owner) {
-        return kvai::infra::Status::Unavailable("document owned by remote node: " + route.primary.id + " trace_id=" + trace);
+        return kvai::infra::Status::Unavailable(RemoteOwnerMessage("document", route, trace));
     }
 
     const auto image_reference = ImageReferenceForRecord(record);
@@ -201,7 +212,7 @@ kvai::infra::Status InProcessGatewayServer::DeleteDocument(std::string collectio
     const auto trace = TraceInjector::EnsureTraceId(trace_id);
     const auto route = DescribeRoute(collection, key);
     if (route.has_primary && !route.local_owner) {
-        return kvai::infra::Status::Unavailable("document owned by remote node: " + route.primary.id + " trace_id=" + trace);
+        return kvai::infra::Status::Unavailable(RemoteOwnerMessage("document", route, trace));
     }
 
     auto status = kv_store_->Delete(collection, key);
@@ -226,7 +237,7 @@ kvai::infra::Status InProcessGatewayServer::PutKvRecord(kvai::core::DocumentReco
     const auto trace = TraceInjector::EnsureTraceId(trace_id);
     const auto route = DescribeRoute(record.collection, record.key);
     if (route.has_primary && !route.local_owner) {
-        return kvai::infra::Status::Unavailable("kv record owned by remote node: " + route.primary.id + " trace_id=" + trace);
+        return kvai::infra::Status::Unavailable(RemoteOwnerMessage("kv record", route, trace));
     }
 
     return kv_store_->Put(record);
@@ -246,7 +257,7 @@ kvai::infra::StatusOr<kvai::core::DocumentRecord> InProcessGatewayServer::GetKvR
     const auto trace = TraceInjector::EnsureTraceId(trace_id);
     const auto route = DescribeRoute(collection, key);
     if (route.has_primary && !route.local_owner) {
-        return kvai::infra::Status::Unavailable("kv record owned by remote node: " + route.primary.id + " trace_id=" + trace);
+        return kvai::infra::Status::Unavailable(RemoteOwnerMessage("kv record", route, trace));
     }
 
     return kv_store_->Get(collection, key);
@@ -279,7 +290,7 @@ kvai::infra::Status InProcessGatewayServer::DeleteKvRecord(std::string collectio
     const auto trace = TraceInjector::EnsureTraceId(trace_id);
     const auto route = DescribeRoute(collection, key);
     if (route.has_primary && !route.local_owner) {
-        return kvai::infra::Status::Unavailable("kv record owned by remote node: " + route.primary.id + " trace_id=" + trace);
+        return kvai::infra::Status::Unavailable(RemoteOwnerMessage("kv record", route, trace));
     }
 
     return kv_store_->Delete(collection, key);
@@ -348,6 +359,30 @@ HealthReport InProcessGatewayServer::HealthCheck(std::string trace_id) const {
     report.details.emplace("disk_utilization_ratio", std::to_string(kvai::infra::MetricsRegistry::DiskUtilizationRatio(config_.wal_path)));
     report.details.emplace("thread_pool_workers", std::to_string(thread_pool_.WorkerCount()));
     report.details.emplace("thread_pool_pending_tasks", std::to_string(thread_pool_.PendingTasks()));
+    report.details.emplace("data_migration_enabled", "false");
+    report.details.emplace("remote_forwarding_enabled", "false");
+    if (discovery_) {
+        const auto discovery_status = discovery_->DiscoveryStatus();
+        report.details.emplace("etcd_discovery_available", discovery_status.available ? "true" : "false");
+        report.details.emplace("etcd_discovery_running", discovery_status.running ? "true" : "false");
+        report.details.emplace("etcd_discovery_degraded", discovery_status.degraded ? "true" : "false");
+        report.details.emplace("etcd_discovery_state", discovery_status.state);
+        report.details.emplace("etcd_lease_id", std::to_string(discovery_status.lease_id));
+        report.details.emplace("etcd_watch_restart_count", std::to_string(discovery_status.watch_restart_count));
+        report.details.emplace("etcd_keepalive_error_count", std::to_string(discovery_status.keepalive_error_count));
+        report.details.emplace("etcd_ring_rebuild_count", std::to_string(discovery_status.ring_rebuild_count));
+        report.details.emplace("etcd_known_node_count", std::to_string(discovery_status.known_node_count));
+        report.details.emplace("etcd_last_success_unix_ms", std::to_string(discovery_status.last_success_unix_ms));
+        if (!discovery_status.last_error.empty()) {
+            report.details.emplace("etcd_last_error", discovery_status.last_error);
+            report.warnings.push_back(discovery_status.last_error);
+        }
+        if (discovery_status.degraded) {
+            report.status = "DEGRADED";
+        }
+    } else {
+        report.details.emplace("etcd_discovery_state", config_.discovery_backend == "etcd" ? "not_started" : "disabled");
+    }
     return report;
 }
 

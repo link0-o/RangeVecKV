@@ -14,6 +14,10 @@ add_executable(kvai_cluster_routing_test cluster_routing_test.cpp)
 target_link_libraries(kvai_cluster_routing_test PRIVATE kvai_infra)
 add_test(NAME kvai_cluster_routing_test COMMAND kvai_cluster_routing_test)
 
+add_executable(kvai_etcd_discovery_test etcd_discovery_test.cpp)
+target_link_libraries(kvai_etcd_discovery_test PRIVATE kvai_infra)
+add_test(NAME kvai_etcd_discovery_test COMMAND kvai_etcd_discovery_test)
+
 add_executable(kvai_config_loader_test config_loader_test.cpp)
 target_link_libraries(kvai_config_loader_test PRIVATE kvai_infra)
 add_test(NAME kvai_config_loader_test COMMAND kvai_config_loader_test)

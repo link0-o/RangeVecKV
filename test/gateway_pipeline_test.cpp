@@ -58,6 +58,12 @@ int main() {
     if (!Expect(report.details.find("search_backend") != report.details.end(), "health details missing backend summary")) {
         return 1;
     }
+    if (!Expect(report.details.find("etcd_discovery_state") != report.details.end(), "health details missing discovery state")) {
+        return 1;
+    }
+    if (!Expect(report.details.find("remote_forwarding_enabled") != report.details.end(), "health details missing forwarding boundary")) {
+        return 1;
+    }
 
     kvai::core::DocumentRecord record{"documents", "doc-999", "Router Aware Write", "Cluster aware document write path", {{"domain", "gateway"}}};
     if (!Expect(server.UpsertDocument(record, "").ok(), "upsert document failed")) {
@@ -106,6 +112,31 @@ int main() {
     }
 
     if (!Expect(server.Stop().ok(), "server stop failed")) {
+        return 1;
+    }
+
+    kvai::infra::ServerConfig remote_config;
+    remote_config.wal_path = (temp_dir / "remote.wal").string();
+    remote_config.snapshot_path = (temp_dir / "remote.snapshot").string();
+    remote_config.db_path = (temp_dir / "remote-rocksdb").string();
+    remote_config.index_path = (temp_dir / "remote.index").string();
+    remote_config.enable_demo_data = false;
+    remote_config.node_id = "local-node";
+    remote_config.cluster_nodes = "remote-node@10.0.0.2:9090";
+    kvai::gateway::InProcessGatewayServer remote_server(remote_config);
+    if (!Expect(remote_server.Start().ok(), "remote-owner server start failed")) {
+        return 1;
+    }
+    kvai::core::DocumentRecord remote_record{"kv", "remote-key", "", "payload", {}};
+    auto remote_status = remote_server.PutKvRecord(remote_record, "");
+    if (!Expect(!remote_status.ok(), "remote owner write should be rejected")) {
+        return 1;
+    }
+    if (!Expect(remote_status.message().find("endpoint=10.0.0.2:9090") != std::string::npos,
+                "remote owner error should include endpoint")) {
+        return 1;
+    }
+    if (!Expect(remote_server.Stop().ok(), "remote-owner server stop failed")) {
         return 1;
     }
 

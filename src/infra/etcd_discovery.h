@@ -15,6 +15,23 @@
 
 namespace kvai::infra {
 
+struct EtcdDiscoveryStatus {
+    bool available = false;
+    bool running = false;
+    bool degraded = false;
+    std::string state = "unavailable";
+    std::string last_error;
+    std::int64_t lease_id = 0;
+    std::uint64_t watch_restart_count = 0;
+    std::uint64_t keepalive_error_count = 0;
+    std::uint64_t ring_rebuild_count = 0;
+    std::size_t known_node_count = 0;
+    std::int64_t last_success_unix_ms = 0;
+};
+
+std::string SerializeEtcdNodeValue(const ClusterNode& node);
+StatusOr<ClusterNode> ParseEtcdNodeValue(const std::string& node_id, const std::string& value);
+
 /// etcd-based service discovery for dynamic cluster membership.
 /// When started, registers the local node with a lease-backed key,
 /// watches the prefix for changes, and rebuilds the consistent hash ring
@@ -30,11 +47,14 @@ public:
 
     /// Returns the currently known cluster nodes (thread-safe).
     std::vector<ClusterNode> CurrentNodes() const;
+    EtcdDiscoveryStatus DiscoveryStatus() const;
 
 private:
     void WatchLoop();
-    void RefreshLease();
+    Status ReloadNodes();
     void RebuildRing(const std::vector<ClusterNode>& nodes);
+    void RecordSuccess(std::string state);
+    void RecordError(std::string state, std::string message, bool degraded);
 
     std::string endpoints_;
     std::string prefix_;
@@ -47,11 +67,13 @@ private:
 
     std::atomic<bool> stopping_{false};
     std::thread watch_thread_;
-    std::thread keepalive_thread_;
 
     // Opaque pointer to etcd client (implementation detail in .cpp)
     struct EtcdClientState;
     std::unique_ptr<EtcdClientState> client_state_;
+    mutable std::mutex client_mutex_;
+    mutable std::mutex status_mutex_;
+    EtcdDiscoveryStatus status_;
 };
 
 }  // namespace kvai::infra

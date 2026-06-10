@@ -33,6 +33,8 @@ storage:
 cluster:
   discovery_backend: static
   node_id: node-local
+  node_weight: 100
+  node_zone: default
   replication_factor: 1
   nodes: node-local@127.0.0.1:8080
   etcd_endpoints: http://127.0.0.1:2379

@@ -15,6 +15,8 @@ struct ClusterNode {
     std::string host;
     std::uint16_t port = 0;
     bool healthy = true;
+    std::uint32_t weight = 100;
+    std::string zone;
 };
 
 struct RouteDecision {

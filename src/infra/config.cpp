@@ -213,6 +213,13 @@ ServerConfig LoadNestedConfig(const YAML::Node& root) {
         config.discovery_backend = ReadString(cluster, "discovery_backend", config.discovery_backend);
         config.node_id = ReadString(cluster, "node_id", config.node_id);
         config.advertise_host = ReadString(cluster, "advertise_host", config.advertise_host);
+        config.node_zone = ReadString(cluster, "node_zone", config.node_zone);
+        if (cluster["node_weight"]) {
+            config.node_weight = static_cast<std::uint32_t>(cluster["node_weight"].as<unsigned int>());
+            if (config.node_weight == 0) {
+                config.node_weight = 100;
+            }
+        }
         if (cluster["replication_factor"]) {
             config.replication_factor = cluster["replication_factor"].as<std::size_t>();
         }
@@ -362,6 +369,15 @@ ServerConfig LoadNestedConfig(const YAML::Node& root) {
     }
     if (const auto iterator = values.find("cluster.advertise_host"); iterator != values.end()) {
         config.advertise_host = iterator->second;
+    }
+    if (const auto iterator = values.find("cluster.node_zone"); iterator != values.end()) {
+        config.node_zone = iterator->second;
+    }
+    if (const auto iterator = values.find("cluster.node_weight"); iterator != values.end()) {
+        config.node_weight = static_cast<std::uint32_t>(std::stoul(iterator->second));
+        if (config.node_weight == 0) {
+            config.node_weight = 100;
+        }
     }
     if (const auto iterator = values.find("cluster.replication_factor"); iterator != values.end()) {
         config.replication_factor = std::stoul(iterator->second);
@@ -519,6 +535,15 @@ StatusOr<ServerConfig> ConfigLoader::LoadFromFile(const std::string& path) {
         }
         if (const auto it = values.find("cluster.advertise_host"); it != values.end()) {
             config.advertise_host = it->second;
+        }
+        if (const auto it = values.find("cluster.node_zone"); it != values.end()) {
+            config.node_zone = it->second;
+        }
+        if (const auto it = values.find("cluster.node_weight"); it != values.end()) {
+            config.node_weight = static_cast<std::uint32_t>(std::stoul(it->second));
+            if (config.node_weight == 0) {
+                config.node_weight = 100;
+            }
         }
         if (const auto it = values.find("cluster.replication_factor"); it != values.end()) {
             config.replication_factor = std::stoul(it->second);

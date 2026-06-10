@@ -28,11 +28,21 @@ if(KVAI_ENABLE_OPTIONAL_BACKENDS)
     find_package(TBB CONFIG QUIET)
 endif()
 
+# nlohmann-json: etcd discovery stores human-readable node metadata in JSON.
+set(KVAI_VCPKG_SHARE_DIR "")
+if(DEFINED VCPKG_TARGET_TRIPLET)
+    set(KVAI_VCPKG_SHARE_DIR "${CMAKE_SOURCE_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/share")
+elseif(EXISTS "${CMAKE_SOURCE_DIR}/vcpkg_installed/x64-linux/share")
+    set(KVAI_VCPKG_SHARE_DIR "${CMAKE_SOURCE_DIR}/vcpkg_installed/x64-linux/share")
+endif()
+find_package(nlohmann_json CONFIG REQUIRED HINTS ${KVAI_VCPKG_SHARE_DIR}/nlohmann_json)
+
 add_library(kvai_infra ${KVAI_INFRA_SOURCES})
 add_library(kvai::infra ALIAS kvai_infra)
 
 target_include_directories(kvai_infra PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_link_libraries(kvai_infra PUBLIC kvai_project_options kvai_project_warnings)
+target_link_libraries(kvai_infra PRIVATE nlohmann_json::nlohmann_json)
 
 # Link conditional libraries
 if(TARGET spdlog::spdlog)

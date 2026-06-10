@@ -129,6 +129,19 @@ When etcd discovery is enabled, set `cluster.advertise_host` to an address that
 other RangeVecKV nodes can reach. The Compose production configuration uses the
 `rangeveckv` service name while continuing to listen on `0.0.0.0`.
 
+Each node registers one lease-backed key under `cluster.etcd_prefix`, such as
+`/rangeveckv/nodes/node-a`. New nodes write JSON values with `version`, `id`,
+`host`, `port`, `healthy`, `weight`, and `zone`; older `host:port` values are
+still accepted while rolling upgrades are in progress. Prefix watch uses an
+explicit etcd range over the configured prefix and reconnects with backoff after
+watch failures. Keepalive and watch status are exposed through `/healthz`
+`etcd_discovery_*` details.
+
+Ring rebuilds update request routing only. Automatic data migration and
+remote-owner write forwarding are not enabled yet; remote-owner writes return
+`Unavailable` with the owner endpoint so clients or an external gateway can
+retry against the owning node.
+
 Fallback mode is intentionally retained so local build/test is not blocked by large production dependencies. It should not be described as the final production performance profile.
 
 ## Persistence

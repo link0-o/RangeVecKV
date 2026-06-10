@@ -36,6 +36,8 @@ cluster:
   discovery_backend: ${KVAI_DISCOVERY_BACKEND}
   node_id: node-local
   advertise_host: ${KVAI_ADVERTISE_HOST}
+  node_weight: ${KVAI_NODE_WEIGHT}
+  node_zone: ${KVAI_NODE_ZONE}
   replication_factor: 1
   nodes: ${KVAI_CLUSTER_NODES}
   etcd_endpoints: ${KVAI_ETCD_ENDPOINTS}

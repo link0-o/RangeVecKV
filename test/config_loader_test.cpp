@@ -38,6 +38,8 @@ int main() {
             output << "logging.level: debug\n";
             output << "logging.file_path: /tmp/kvai.log\n";
             output << "cluster.advertise_host: node-a\n";
+            output << "cluster.node_weight: 150\n";
+            output << "cluster.node_zone: zone-a\n";
             output << "cluster.etcd_endpoints: http://etcd:2379\n";
         }
 
@@ -57,6 +59,8 @@ int main() {
             if (!Expect(config.value().log_level == "debug", "flat: logging.level not parsed")) ++failures;
             if (!Expect(config.value().log_file_path == "/tmp/kvai.log", "flat: logging.file_path not parsed")) ++failures;
             if (!Expect(config.value().advertise_host == "node-a", "flat: advertise_host not parsed")) ++failures;
+            if (!Expect(config.value().node_weight == 150, "flat: node_weight not parsed")) ++failures;
+            if (!Expect(config.value().node_zone == "zone-a", "flat: node_zone not parsed")) ++failures;
             if (!Expect(config.value().etcd_endpoints == "http://etcd:2379", "flat: etcd_endpoints not parsed")) ++failures;
         }
     }
@@ -91,6 +95,8 @@ int main() {
             output << "cluster:\n";
             output << "  node_id: test-node\n";
             output << "  advertise_host: test-node\n";
+            output << "  node_weight: 200\n";
+            output << "  node_zone: zone-b\n";
             output << "  nodes: ${KVAI_TEST_CLUSTER}\n";
             output << "  etcd_endpoints: http://etcd:2379\n";
             output << "  etcd_lease_ttl_s: 20\n";
@@ -123,6 +129,8 @@ int main() {
             if (!Expect(config.value().max_top_k == 30, "nested: max_top_k not parsed")) ++failures;
             if (!Expect(config.value().cluster_nodes == "node-b@10.0.0.1:9090", "nested: cluster env expansion failed")) ++failures;
             if (!Expect(config.value().advertise_host == "test-node", "nested: advertise_host not parsed")) ++failures;
+            if (!Expect(config.value().node_weight == 200, "nested: node_weight not parsed")) ++failures;
+            if (!Expect(config.value().node_zone == "zone-b", "nested: node_zone not parsed")) ++failures;
             if (!Expect(config.value().etcd_endpoints == "http://etcd:2379", "nested: etcd endpoints not parsed")) ++failures;
             if (!Expect(config.value().etcd_lease_ttl_s == 20, "nested: etcd lease ttl not parsed")) ++failures;
             if (!Expect(config.value().tls_mode == "enabled", "nested: tls_mode not parsed")) ++failures;

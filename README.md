@@ -25,7 +25,7 @@ The project keeps two runtime profiles:
 - Search: FAISS backend plus persistent brute-force fallback
 - Routing: static membership, etcd discovery, consistent hashing, owner checks
 - Control plane: API key/Bearer auth, rate limiting, trace IDs, read-only mode, graceful shutdown
-- Observability: spdlog/fallback logging, Prometheus metrics, health details for backends, CPU/disk, and thread pool state
+- Observability: spdlog/fallback logging, Prometheus metrics, health details for backends, etcd discovery state, CPU/disk, and thread pool state
 
 ## Architecture
 
@@ -125,6 +125,18 @@ Images for image embedding/search should be placed under the host `images/` dire
 ```text
 /opt/rangeveckv/images/example.jpg
 ```
+
+## etcd Discovery
+
+When `cluster.discovery_backend=etcd`, each node registers a lease-backed key under `cluster.etcd_prefix`, for example `/rangeveckv/nodes/node-a`. New registrations write a JSON value:
+
+```json
+{"version":1,"id":"node-a","host":"rangeveckv-a","port":8080,"healthy":true,"weight":100,"zone":"default"}
+```
+
+Older `host:port` values remain readable. Prefix watching uses an explicit range over the configured prefix; watch disconnects are reloaded and reconnected with backoff. Keepalive/watch state is exposed in `/healthz` through `etcd_discovery_*` fields.
+
+Current boundary: ring changes update routing only. Automatic data migration and remote-owner write forwarding are intentionally not enabled yet; remote-owner writes return `Unavailable` with the target node endpoint.
 
 ## API Examples
 

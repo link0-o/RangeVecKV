@@ -45,6 +45,8 @@ nlohmann::json ToJson(const kvai::infra::RouteDecision& route) {
     primary["id"] = route.primary.id;
     primary["host"] = route.primary.host;
     primary["port"] = route.primary.port;
+    primary["weight"] = route.primary.weight;
+    primary["zone"] = route.primary.zone;
     j["primary"] = primary;
 
     auto replicas = nlohmann::json::array();
@@ -53,6 +55,8 @@ nlohmann::json ToJson(const kvai::infra::RouteDecision& route) {
         r["id"] = replica.id;
         r["host"] = replica.host;
         r["port"] = replica.port;
+        r["weight"] = replica.weight;
+        r["zone"] = replica.zone;
         replicas.push_back(r);
     }
     j["replicas"] = replicas;
