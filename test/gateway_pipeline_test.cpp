@@ -97,6 +97,15 @@ int main() {
     if (!Expect(server.PutKvRecord(kv_record, "").ok(), "kv put failed")) {
         return 1;
     }
+    kvai::core::DocumentRecord kv_batch_a{"kv", "batch:user:1", "", "batch payload 1", {{"kind", "kv-only"}}};
+    kvai::core::DocumentRecord kv_batch_b{"kv", "batch:user:2", "", "batch payload 2", {{"kind", "kv-only"}}};
+    if (!Expect(server.PutKvRecords({kv_batch_a, kv_batch_b}, "").ok(), "kv batch put failed")) {
+        return 1;
+    }
+    auto batch_stored = server.GetKvRecord("kv", "batch:user:2", "");
+    if (!Expect(batch_stored.ok() && batch_stored.value().body == "batch payload 2", "kv batch get returned wrong value")) {
+        return 1;
+    }
     auto stored = server.GetKvRecord("kv", "user:1", "");
     if (!Expect(stored.ok(), "kv get failed")) {
         return 1;
@@ -169,6 +178,15 @@ int main() {
     }
     if (!Expect(remote_status.message().find("endpoint=10.0.0.2:9090") != std::string::npos,
                 "remote owner error should include endpoint")) {
+        return 1;
+    }
+    kvai::core::DocumentRecord remote_batch_record{"kv", "remote-batch-key", "", "payload", {}};
+    auto remote_batch_status = remote_server.PutKvRecords({remote_batch_record}, "");
+    if (!Expect(!remote_batch_status.ok(), "remote owner batch write should be rejected")) {
+        return 1;
+    }
+    if (!Expect(remote_batch_status.message().find("endpoint=10.0.0.2:9090") != std::string::npos,
+                "remote owner batch error should include endpoint")) {
         return 1;
     }
     if (!Expect(remote_server.Stop().ok(), "remote-owner server stop failed")) {

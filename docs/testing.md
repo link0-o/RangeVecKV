@@ -66,6 +66,10 @@ export PATH="$HOME/.local/bin:$PATH"
 - `kvai_auth_test`
 - `kvai_thread_pool_test`
 
+在启用 BRPC/生产依赖的构建中，还会额外覆盖：
+
+- `kvai_brpc_kv_write_service_test`
+
 如果你只想单独重跑测试：
 
 ```bash
@@ -158,6 +162,21 @@ export KVAI_USE_VCPKG_TOOLCHAIN=1
 这条路径会尝试接入完整 vcpkg toolchain，并可能触发 ONNX Runtime、FAISS、RocksDB 等大依赖构建。
 
 这不是默认本地验证路径，也不建议作为第一次编译测试方式。
+
+生产构建通过后，可以单独验证 typed Protobuf BRPC 写入路径：
+
+```bash
+./build/production/src/gateway/kvai_brpc_kv_benchmark \
+  --server 127.0.0.1:8080 \
+  --api-key "$KVAI_API_KEY" \
+  --mode kv \
+  --threads 2 \
+  --duration-seconds 2 \
+  --warmup-seconds 0 \
+  --output perf_results/brpc_kv_smoke.json
+```
+
+这条命令只做轻量 smoke；正式性能测试请固定生产 Docker/native 模式、电源模式、数据目录状态、并发、batch size 和后端组合。
 
 ## 8. 常见问题
 

@@ -413,7 +413,7 @@ void EtcdServiceDiscovery::RebuildRing(const std::vector<ClusterNode>& nodes) {
             ++status_.ring_rebuild_count;
             status_.known_node_count = nodes.size();
         }
-        log::Info("etcd-discovery", "rebuilt consistent hash ring",
+        log::Info("etcd-discovery", "rebuilt slot owner ring",
                   {{"node_count", std::to_string(nodes.size())},
                    {"remote_forwarding_enabled", "false"}});
         std::function<void()> callback;

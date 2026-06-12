@@ -2,7 +2,7 @@ openapi: 3.0.3
 info:
   title: RangeVecKV Gateway API
   version: 0.1.0
-  description: HTTP gateway for semantic search, health probes and metrics.
+  description: HTTP gateway for semantic search, pure KV compatibility APIs, health probes and metrics. Production write clients should prefer the typed Protobuf BRPC KvWriteService defined in proto/search.proto; that RPC surface is not represented by this OpenAPI document.
 servers:
   - url: http://127.0.0.1:8080
 paths:
@@ -28,7 +28,7 @@ paths:
           description: YAML OpenAPI spec
   /v1/router:
     get:
-      summary: Resolve document ownership via consistent hash routing
+      summary: Resolve fixed slot and owner node for a collection/key
       parameters:
         - in: query
           name: collection
@@ -212,6 +212,51 @@ paths:
           description: KV record deleted
         '400':
           description: Missing key or invalid request
+        '401':
+          description: Missing or invalid API key
+        '503':
+          description: Routed to a remote node or service unavailable
+  /v1/kv/batch:
+    post:
+      summary: Store multiple pure KV records without embedding or vector index updates
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - records
+              properties:
+                records:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      collection:
+                        type: string
+                      key:
+                        type: string
+                      value:
+                        type: string
+                        description: Alias stored as the record body.
+                      title:
+                        type: string
+                      body:
+                        type: string
+                      metadata:
+                        type: object
+                        additionalProperties:
+                          type: string
+                      version:
+                        type: integer
+                      mutation_id:
+                        type: string
+      responses:
+        '200':
+          description: KV batch stored
+        '400':
+          description: Empty batch, duplicate key, oversized batch or invalid request
         '401':
           description: Missing or invalid API key
         '503':

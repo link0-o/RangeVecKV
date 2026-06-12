@@ -1,9 +1,13 @@
 #include "core/kv_store.h"
 
+#include <algorithm>
+#include <array>
 #include <filesystem>
+#include <functional>
 #include <fstream>
 #include <sstream>
 #include <set>
+#include <utility>
 
 #include "core/persistence_codec.h"
 
@@ -166,7 +170,15 @@ kvai::infra::Status EnsureParentDirectory(const std::string& path) {
 #if defined(KVAI_HAVE_ROCKSDB)
 class RocksDbKvStore final : public KvStore {
 public:
-    explicit RocksDbKvStore(std::string db_path) : db_path_(std::move(db_path)) {}
+    explicit RocksDbKvStore(const kvai::infra::ServerConfig& config)
+        : db_path_(config.db_path),
+          max_background_jobs_(config.rocksdb_max_background_jobs),
+          write_buffer_size_mb_(config.rocksdb_write_buffer_size_mb),
+          max_write_buffer_number_(config.rocksdb_max_write_buffer_number),
+          target_file_size_mb_(config.rocksdb_target_file_size_mb),
+          bytes_per_sync_(config.rocksdb_bytes_per_sync),
+          wal_bytes_per_sync_(config.rocksdb_wal_bytes_per_sync),
+          enable_pipelined_write_(config.rocksdb_enable_pipelined_write) {}
 
     ~RocksDbKvStore() override {
         if (db_ == nullptr) {
@@ -187,6 +199,15 @@ public:
         rocksdb::Options options;
         options.create_if_missing = true;
         options.create_missing_column_families = true;
+        options.max_background_jobs = static_cast<int>(std::max<std::size_t>(1, max_background_jobs_));
+        options.bytes_per_sync = bytes_per_sync_;
+        options.wal_bytes_per_sync = wal_bytes_per_sync_;
+        options.enable_pipelined_write = enable_pipelined_write_;
+
+        rocksdb::ColumnFamilyOptions cf_options;
+        cf_options.write_buffer_size = std::max<std::size_t>(1, write_buffer_size_mb_) * 1024 * 1024;
+        cf_options.max_write_buffer_number = static_cast<int>(std::max<std::size_t>(2, max_write_buffer_number_));
+        cf_options.target_file_size_base = std::max<std::size_t>(1, target_file_size_mb_) * 1024 * 1024;
 
         std::vector<std::string> names;
         const auto list_status = rocksdb::DB::ListColumnFamilies(options, db_path_, &names);
@@ -197,7 +218,7 @@ public:
         std::vector<rocksdb::ColumnFamilyDescriptor> descriptors;
         descriptors.reserve(names.size());
         for (const auto& name : names) {
-            descriptors.emplace_back(name, rocksdb::ColumnFamilyOptions());
+            descriptors.emplace_back(name, cf_options);
         }
 
         std::vector<rocksdb::ColumnFamilyHandle*> handles;
@@ -218,6 +239,7 @@ public:
         if (db_ == nullptr) {
             return kvai::infra::Status::Unavailable("rocksdb store not initialized");
         }
+        std::unique_lock<std::mutex> key_lock(KeyMutexFor(record.collection, record.key));
         auto* cf = GetOrCreateColumnFamily(record.collection);
         if (cf == nullptr) {
             return kvai::infra::Status::Internal("failed to get column family for collection: " + record.collection);
@@ -247,6 +269,15 @@ public:
         if (db_ == nullptr) {
             return kvai::infra::Status::Unavailable("rocksdb store not initialized");
         }
+        std::set<std::string> batch_keys;
+        for (const auto& record : records) {
+            const auto composite_key = BuildCompositeKey(record.collection, record.key);
+            if (!batch_keys.insert(composite_key).second) {
+                return kvai::infra::Status::InvalidArgument("kv batch contains duplicate key: " + record.collection + ":" + record.key);
+            }
+        }
+
+        auto key_locks = LockRecordStripes(records);
         rocksdb::WriteBatch batch;
         for (const auto& record : records) {
             auto* cf = GetOrCreateColumnFamily(record.collection);
@@ -280,6 +311,7 @@ public:
         if (db_ == nullptr) {
             return kvai::infra::Status::Unavailable("rocksdb store not initialized");
         }
+        std::unique_lock<std::mutex> key_lock(KeyMutexFor(collection, key));
         auto* cf = GetOrCreateColumnFamily(collection);
         if (cf == nullptr) {
             return kvai::infra::Status::Ok();  // Collection doesn't exist, nothing to delete
@@ -413,6 +445,27 @@ public:
     }
 
 private:
+    static constexpr std::size_t kKeyLockStripes = 4096;
+
+    std::mutex& KeyMutexFor(const std::string& collection, const std::string& key) const {
+        const auto stripe = std::hash<std::string>{}(BuildCompositeKey(collection, key)) % key_mutexes_.size();
+        return key_mutexes_[stripe];
+    }
+
+    std::vector<std::unique_lock<std::mutex>> LockRecordStripes(const std::vector<DocumentRecord>& records) const {
+        std::set<std::size_t> stripes;
+        for (const auto& record : records) {
+            stripes.insert(std::hash<std::string>{}(BuildCompositeKey(record.collection, record.key)) % key_mutexes_.size());
+        }
+
+        std::vector<std::unique_lock<std::mutex>> locks;
+        locks.reserve(stripes.size());
+        for (const auto stripe : stripes) {
+            locks.emplace_back(key_mutexes_[stripe]);
+        }
+        return locks;
+    }
+
     rocksdb::ColumnFamilyHandle* GetOrCreateColumnFamily(const std::string& collection) {
         std::lock_guard<std::mutex> lock(cf_mutex_);
         auto iterator = column_families_.find(collection);
@@ -421,7 +474,11 @@ private:
         }
 
         rocksdb::ColumnFamilyHandle* cf = nullptr;
-        auto status = db_->CreateColumnFamily(rocksdb::ColumnFamilyOptions(), collection, &cf);
+        rocksdb::ColumnFamilyOptions options;
+        options.write_buffer_size = std::max<std::size_t>(1, write_buffer_size_mb_) * 1024 * 1024;
+        options.max_write_buffer_number = static_cast<int>(std::max<std::size_t>(2, max_write_buffer_number_));
+        options.target_file_size_base = std::max<std::size_t>(1, target_file_size_mb_) * 1024 * 1024;
+        auto status = db_->CreateColumnFamily(options, collection, &cf);
         if (!status.ok()) {
             return nullptr;
         }
@@ -440,8 +497,16 @@ private:
     }
 
     std::string db_path_;
+    std::size_t max_background_jobs_;
+    std::size_t write_buffer_size_mb_;
+    std::size_t max_write_buffer_number_;
+    std::size_t target_file_size_mb_;
+    std::uint64_t bytes_per_sync_;
+    std::uint64_t wal_bytes_per_sync_;
+    bool enable_pipelined_write_;
     std::unique_ptr<rocksdb::DB> db_;
     mutable std::mutex cf_mutex_;
+    mutable std::array<std::mutex, kKeyLockStripes> key_mutexes_;
     std::map<std::string, rocksdb::ColumnFamilyHandle*> column_families_;
 };
 #endif
@@ -483,13 +548,41 @@ kvai::infra::Status WriteAheadKvStore::Put(const DocumentRecord& record) {
 }
 
 kvai::infra::Status WriteAheadKvStore::BatchPut(const std::vector<DocumentRecord>& records) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::set<std::string> batch_keys;
+    auto staged = records_;
+    std::vector<DocumentRecord> to_apply;
+    to_apply.reserve(records.size());
+
     for (const auto& record : records) {
-        const auto status = Put(record);
-        if (!status.ok()) {
-            return status;
+        const auto composite_key = BuildCompositeKey(record.collection, record.key);
+        if (!batch_keys.insert(composite_key).second) {
+            return kvai::infra::Status::InvalidArgument("kv batch contains duplicate key: " + record.collection + ":" + record.key);
         }
+
+        const auto existing = staged.find(composite_key);
+        if (existing != staged.end()) {
+            const auto mutation_status = ValidateMutation(existing->second, record);
+            if (!mutation_status.ok()) {
+                return mutation_status;
+            }
+            if (IsDuplicateMutation(existing->second, record)) {
+                continue;
+            }
+        }
+        staged[composite_key] = record;
+        to_apply.push_back(record);
     }
 
+    if (to_apply.empty()) {
+        return kvai::infra::Status::Ok();
+    }
+
+    auto status = AppendWalBatchLocked(to_apply, staged);
+    if (!status.ok()) {
+        return status;
+    }
+    records_ = std::move(staged);
     return kvai::infra::Status::Ok();
 }
 
@@ -695,6 +788,43 @@ kvai::infra::Status WriteAheadKvStore::AppendWalLocked(char operation, const Doc
     return kvai::infra::Status::Ok();
 }
 
+kvai::infra::Status WriteAheadKvStore::AppendWalBatchLocked(const std::vector<DocumentRecord>& records,
+                                                            const std::map<std::string, DocumentRecord>& snapshot_after) {
+    auto status = EnsureParentDirectory(wal_path_);
+    if (!status.ok()) {
+        return status;
+    }
+
+    const bool rewrite_legacy = ShouldRewriteLegacyWal(wal_path_);
+    const bool needs_header = rewrite_legacy || !std::filesystem::exists(wal_path_) || std::filesystem::file_size(wal_path_) == 0;
+    std::ofstream output(wal_path_, std::ios::binary | (rewrite_legacy ? std::ios::trunc : std::ios::app));
+    if (!output.is_open()) {
+        return kvai::infra::Status::Internal("failed to open wal file for writing");
+    }
+
+    if (needs_header) {
+        output << persistence::MagicHeader();
+    }
+    if (rewrite_legacy) {
+        for (const auto& [_, current] : snapshot_after) {
+            (void)_;
+            persistence::WalEntry current_entry;
+            current_entry.operation = persistence::WalOperation::kPut;
+            current_entry.record = current;
+            output << persistence::EncodeFrame(persistence::EncodeWalEntry(current_entry));
+        }
+        return kvai::infra::Status::Ok();
+    }
+
+    for (const auto& record : records) {
+        persistence::WalEntry entry;
+        entry.operation = persistence::WalOperation::kPut;
+        entry.record = record;
+        output << persistence::EncodeFrame(persistence::EncodeWalEntry(entry));
+    }
+    return kvai::infra::Status::Ok();
+}
+
 kvai::infra::Status WriteAheadKvStore::AppendDeleteLocked(const std::string& collection, const std::string& key) {
     auto status = EnsureParentDirectory(wal_path_);
     if (!status.ok()) {
@@ -732,7 +862,7 @@ kvai::infra::Status WriteAheadKvStore::AppendDeleteLocked(const std::string& col
 kvai::infra::StatusOr<std::unique_ptr<KvStore>> CreateKvStore(const kvai::infra::ServerConfig& config) {
 #if defined(KVAI_HAVE_ROCKSDB)
     if (config.storage_backend == "rocksdb" || config.storage_backend == "auto") {
-        auto store = std::make_unique<RocksDbKvStore>(config.db_path);
+        auto store = std::make_unique<RocksDbKvStore>(config);
         auto status = store->Recover();
         if (!status.ok()) {
             if (config.storage_backend == "rocksdb") {

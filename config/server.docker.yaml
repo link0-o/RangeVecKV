@@ -4,6 +4,7 @@ server.worker_threads: 8
 server.graceful_shutdown_timeout_ms: 8000
 
 gateway.rate_limit_per_second: 1000
+gateway.kv_batch_max_records: 1000
 gateway.openapi_path: /opt/rangeveckv/share/rangeveckv/docs/openapi.yaml
 gateway.require_api_key: true
 gateway.api_key: ${KVAI_API_KEY}
@@ -27,6 +28,13 @@ storage.enable_demo_data: false
 storage.wal_path: /opt/rangeveckv/data/kvai.wal
 storage.snapshot_path: /opt/rangeveckv/data/kvai.snapshot
 storage.db_path: /opt/rangeveckv/data/rocksdb
+storage.rocksdb_max_background_jobs: 8
+storage.rocksdb_write_buffer_size_mb: 128
+storage.rocksdb_max_write_buffer_number: 6
+storage.rocksdb_target_file_size_mb: 128
+storage.rocksdb_bytes_per_sync: 1048576
+storage.rocksdb_wal_bytes_per_sync: 1048576
+storage.rocksdb_enable_pipelined_write: true
 
 cluster.discovery_backend: ${KVAI_DISCOVERY_BACKEND}
 cluster.node_id: node-local

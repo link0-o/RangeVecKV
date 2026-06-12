@@ -5,6 +5,7 @@
 #include <sstream>
 
 #include "gateway/brpc_http_service.h"
+#include "gateway/brpc_kv_write_service.h"
 #include "infra/logging.h"
 
 namespace kvai::gateway {
@@ -40,10 +41,16 @@ kvai::infra::Status BrpcGatewayRuntime::Start() {
                                   "/v1/search => Search,"
                                   "/v1/router => Router,"
                                   "/v1/kv => Kv,"
+                                  "/v1/kv/batch => Kv,"
                                   "/v1/documents => UpsertDocument,"
                                   "/v1/documents/delete => DeleteDocument,"
                                   "/internal/migration/records => MigrateRecord") != 0) {
         return kvai::infra::Status::Internal("failed to add BRPC HTTP service");
+    }
+
+    kv_write_service_ = new BrpcKvWriteServiceImpl(server_, authenticator_);
+    if (brpc_server_->AddService(kv_write_service_, brpc::SERVER_OWNS_SERVICE) != 0) {
+        return kvai::infra::Status::Internal("failed to add BRPC KV write service");
     }
 
     // Configure server options

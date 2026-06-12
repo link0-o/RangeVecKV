@@ -161,6 +161,26 @@ kvai::infra::StatusOr<kvai::core::DocumentRecord> ParseDocumentUpsert(const nloh
     return record;
 }
 
+kvai::infra::StatusOr<std::vector<kvai::core::DocumentRecord>> ParseKvBatchUpsert(const nlohmann::json& j) {
+    if (!j.is_object() || !j.contains("records") || !j["records"].is_array()) {
+        return kvai::infra::Status::InvalidArgument("kv batch request must contain records array");
+    }
+
+    std::vector<kvai::core::DocumentRecord> records;
+    records.reserve(j["records"].size());
+    for (const auto& item : j["records"]) {
+        if (!item.is_object()) {
+            return kvai::infra::Status::InvalidArgument("kv batch records must be objects");
+        }
+        auto parsed = ParseDocumentUpsert(item);
+        if (!parsed.ok()) {
+            return parsed.status();
+        }
+        records.push_back(parsed.value());
+    }
+    return records;
+}
+
 // --- HTTP Response Helpers ---
 
 std::string BuildHttpResponse(int status_code, const std::string& status_text,

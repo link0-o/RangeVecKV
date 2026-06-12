@@ -6,6 +6,7 @@ server:
 
 gateway:
   rate_limit_per_second: 1000
+  kv_batch_max_records: 1000
   openapi_path: /opt/rangeveckv/share/rangeveckv/docs/openapi.yaml
   require_api_key: true
   api_key: ${KVAI_API_KEY}
@@ -32,6 +33,13 @@ storage:
   wal_path: /opt/rangeveckv/data/kvai.wal
   snapshot_path: /opt/rangeveckv/data/kvai.snapshot
   db_path: /opt/rangeveckv/data/rocksdb
+  rocksdb_max_background_jobs: 8
+  rocksdb_write_buffer_size_mb: 128
+  rocksdb_max_write_buffer_number: 6
+  rocksdb_target_file_size_mb: 128
+  rocksdb_bytes_per_sync: 1048576
+  rocksdb_wal_bytes_per_sync: 1048576
+  rocksdb_enable_pipelined_write: true
 
 cluster:
   discovery_backend: ${KVAI_DISCOVERY_BACKEND}

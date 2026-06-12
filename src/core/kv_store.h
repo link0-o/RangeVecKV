@@ -53,6 +53,8 @@ private:
     kvai::infra::Status ReplaySnapshotLocked();
     kvai::infra::Status ReplayWalLocked();
     kvai::infra::Status AppendWalLocked(char operation, const DocumentRecord& record);
+    kvai::infra::Status AppendWalBatchLocked(const std::vector<DocumentRecord>& records,
+                                             const std::map<std::string, DocumentRecord>& snapshot_after);
     kvai::infra::Status AppendDeleteLocked(const std::string& collection, const std::string& key);
 
     std::string wal_path_;

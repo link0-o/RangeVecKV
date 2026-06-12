@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <utility>
 
 #include <brpc/closure_guard.h>
 #include <brpc/controller.h>
@@ -211,7 +212,40 @@ void BrpcHttpServiceImpl::Kv(google::protobuf::RpcController* controller,
 
     const auto params = QueryParamsFromController(cntl);
     const auto method = cntl->http_request().method();
+    const auto path = cntl->http_request().uri().path();
     const auto trace_id = headers.count("x-trace-id") == 0 ? std::string() : headers["x-trace-id"];
+
+    if (path == "/v1/kv/batch") {
+        if (method != brpc::HTTP_METHOD_POST) {
+            nlohmann::json error_json;
+            error_json["message"] = "unsupported method for /v1/kv/batch";
+            ReplyJson(cntl, 405, error_json.dump());
+            return;
+        }
+
+        auto body_json = nlohmann::json::parse(cntl->request_attachment().to_string(), nullptr, false);
+        if (body_json.is_discarded()) {
+            ReplyStatus(cntl, kvai::infra::Status::InvalidArgument("malformed kv batch json"));
+            return;
+        }
+        auto parsed = json::ParseKvBatchUpsert(body_json);
+        if (!parsed.ok()) {
+            ReplyStatus(cntl, parsed.status());
+            return;
+        }
+        auto records = parsed.ConsumeValue();
+        const auto record_count = records.size();
+        auto status = server_.PutKvRecords(std::move(records), trace_id);
+        if (!status.ok()) {
+            ReplyStatus(cntl, status);
+            return;
+        }
+        nlohmann::json ok_json;
+        ok_json["message"] = "kv batch stored";
+        ok_json["record_count"] = record_count;
+        ReplyJson(cntl, 200, ok_json.dump());
+        return;
+    }
 
     if (method == brpc::HTTP_METHOD_GET) {
         const auto collection = params.count("collection") == 0 ? std::string() : params.at("collection");

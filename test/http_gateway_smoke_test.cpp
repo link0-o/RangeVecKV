@@ -102,6 +102,7 @@ int main() {
     config.port = PickUnusedPort();
     config.require_api_key = true;
     config.api_key = "secret-token";
+    config.kv_batch_max_records = 2;
     config.wal_path = (temp_dir / "gateway.wal").string();
     config.snapshot_path = (temp_dir / "gateway.snapshot").string();
     config.index_path = (temp_dir / "gateway.index").string();
@@ -168,6 +169,30 @@ int main() {
                                     "{\"collection\":\"kv\",\"key\":\"session:1\",\"value\":\"plain kv value\",\"metadata\":{\"kind\":\"kv-only\"}}",
                                     {"X-API-Key: secret-token"});
     if (!Expect(kv_put.find("200 OK") != std::string::npos, "kv put endpoint returned non-200")) {
+        runtime.Stop();
+        return 1;
+    }
+
+    const auto kv_batch_put = HttpRequest(config.port,
+                                          "POST",
+                                          "/v1/kv/batch",
+                                          "{\"records\":[{\"collection\":\"kv\",\"key\":\"batch:1\",\"value\":\"batch value 1\"},{\"collection\":\"kv\",\"key\":\"batch:2\",\"value\":\"batch value 2\"}]}",
+                                          {"X-API-Key: secret-token"});
+    if (!Expect(kv_batch_put.find("200 OK") != std::string::npos, "kv batch endpoint returned non-200")) {
+        runtime.Stop();
+        return 1;
+    }
+    const auto kv_batch_get = HttpRequest(config.port, "GET", "/v1/kv?collection=kv&key=batch:2", {}, {"X-API-Key: secret-token"});
+    if (!Expect(kv_batch_get.find("batch value 2") != std::string::npos, "kv batch record missing")) {
+        runtime.Stop();
+        return 1;
+    }
+    const auto kv_batch_too_large = HttpRequest(config.port,
+                                                "POST",
+                                                "/v1/kv/batch",
+                                                "{\"records\":[{\"collection\":\"kv\",\"key\":\"batch:3\",\"value\":\"3\"},{\"collection\":\"kv\",\"key\":\"batch:4\",\"value\":\"4\"},{\"collection\":\"kv\",\"key\":\"batch:5\",\"value\":\"5\"}]}",
+                                                {"X-API-Key: secret-token"});
+    if (!Expect(kv_batch_too_large.find("400 Bad Request") != std::string::npos, "oversized kv batch should return 400")) {
         runtime.Stop();
         return 1;
     }

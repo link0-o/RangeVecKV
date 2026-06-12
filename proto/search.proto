@@ -73,6 +73,33 @@ message HealthCheckResponse {
   map<string, string> details = 5;
 }
 
+message RequestContext {
+  string trace_id = 1;
+  string api_key = 2;
+  string authorization = 3;
+}
+
+message KvPutRequest {
+  RequestContext context = 1;
+  DocumentRecord record = 2;
+}
+
+message KvBatchPutRequest {
+  RequestContext context = 1;
+  repeated DocumentRecord records = 2;
+}
+
+message DocumentUpsertRequest {
+  RequestContext context = 1;
+  DocumentRecord record = 2;
+}
+
+message KvWriteResponse {
+  string trace_id = 1;
+  string message = 2;
+  uint32 record_count = 3;
+}
+
 // Generic request for HTTP-only endpoints that use controller directly
 message HttpRequest {
 }
@@ -106,4 +133,10 @@ service GatewayService {
   rpc Metrics(HttpRequest) returns (HttpResponse);
   // GET /openapi.yaml
   rpc OpenApi(HttpRequest) returns (HttpResponse);
+}
+
+service KvWriteService {
+  rpc PutKv(KvPutRequest) returns (KvWriteResponse);
+  rpc BatchPutKv(KvBatchPutRequest) returns (KvWriteResponse);
+  rpc UpsertDocument(DocumentUpsertRequest) returns (KvWriteResponse);
 }

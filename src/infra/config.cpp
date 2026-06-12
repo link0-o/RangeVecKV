@@ -168,6 +168,9 @@ ServerConfig LoadNestedConfig(const YAML::Node& root) {
         if (gateway["rate_limit_per_second"]) {
             config.rate_limit_per_second = gateway["rate_limit_per_second"].as<std::size_t>();
         }
+        if (gateway["kv_batch_max_records"]) {
+            config.kv_batch_max_records = std::max<std::size_t>(1, gateway["kv_batch_max_records"].as<std::size_t>());
+        }
         config.openapi_path = ReadString(gateway, "openapi_path", config.openapi_path);
         config.require_api_key = ReadBool(gateway, "require_api_key", config.require_api_key);
         config.api_key = ReadString(gateway, "api_key", config.api_key);
@@ -217,6 +220,15 @@ ServerConfig LoadNestedConfig(const YAML::Node& root) {
         config.wal_path = ReadString(storage, "wal_path", config.wal_path);
         config.snapshot_path = ReadString(storage, "snapshot_path", config.snapshot_path);
         config.db_path = ReadString(storage, "db_path", config.db_path);
+        config.rocksdb_max_background_jobs = ReadSize(storage, "rocksdb_max_background_jobs", config.rocksdb_max_background_jobs);
+        config.rocksdb_write_buffer_size_mb = ReadSize(storage, "rocksdb_write_buffer_size_mb", config.rocksdb_write_buffer_size_mb);
+        config.rocksdb_max_write_buffer_number = ReadSize(storage, "rocksdb_max_write_buffer_number", config.rocksdb_max_write_buffer_number);
+        config.rocksdb_target_file_size_mb = ReadSize(storage, "rocksdb_target_file_size_mb", config.rocksdb_target_file_size_mb);
+        config.rocksdb_bytes_per_sync = static_cast<std::uint64_t>(
+            ReadSize(storage, "rocksdb_bytes_per_sync", static_cast<std::size_t>(config.rocksdb_bytes_per_sync)));
+        config.rocksdb_wal_bytes_per_sync = static_cast<std::uint64_t>(
+            ReadSize(storage, "rocksdb_wal_bytes_per_sync", static_cast<std::size_t>(config.rocksdb_wal_bytes_per_sync)));
+        config.rocksdb_enable_pipelined_write = ReadBool(storage, "rocksdb_enable_pipelined_write", config.rocksdb_enable_pipelined_write);
     }
 
     // cluster section
@@ -323,6 +335,9 @@ ServerConfig LoadNestedConfig(const YAML::Node& root) {
     if (const auto iterator = values.find("gateway.rate_limit_per_second"); iterator != values.end()) {
         config.rate_limit_per_second = std::stoul(iterator->second);
     }
+    if (const auto iterator = values.find("gateway.kv_batch_max_records"); iterator != values.end()) {
+        config.kv_batch_max_records = std::max<std::size_t>(1, std::stoul(iterator->second));
+    }
     if (const auto iterator = values.find("gateway.require_api_key"); iterator != values.end()) {
         config.require_api_key = ParseBool(iterator->second);
     }
@@ -367,6 +382,27 @@ ServerConfig LoadNestedConfig(const YAML::Node& root) {
     }
     if (const auto iterator = values.find("storage.db_path"); iterator != values.end()) {
         config.db_path = iterator->second;
+    }
+    if (const auto iterator = values.find("storage.rocksdb_max_background_jobs"); iterator != values.end()) {
+        config.rocksdb_max_background_jobs = std::max<std::size_t>(1, std::stoul(iterator->second));
+    }
+    if (const auto iterator = values.find("storage.rocksdb_write_buffer_size_mb"); iterator != values.end()) {
+        config.rocksdb_write_buffer_size_mb = std::max<std::size_t>(1, std::stoul(iterator->second));
+    }
+    if (const auto iterator = values.find("storage.rocksdb_max_write_buffer_number"); iterator != values.end()) {
+        config.rocksdb_max_write_buffer_number = std::max<std::size_t>(2, std::stoul(iterator->second));
+    }
+    if (const auto iterator = values.find("storage.rocksdb_target_file_size_mb"); iterator != values.end()) {
+        config.rocksdb_target_file_size_mb = std::max<std::size_t>(1, std::stoul(iterator->second));
+    }
+    if (const auto iterator = values.find("storage.rocksdb_bytes_per_sync"); iterator != values.end()) {
+        config.rocksdb_bytes_per_sync = static_cast<std::uint64_t>(std::stoull(iterator->second));
+    }
+    if (const auto iterator = values.find("storage.rocksdb_wal_bytes_per_sync"); iterator != values.end()) {
+        config.rocksdb_wal_bytes_per_sync = static_cast<std::uint64_t>(std::stoull(iterator->second));
+    }
+    if (const auto iterator = values.find("storage.rocksdb_enable_pipelined_write"); iterator != values.end()) {
+        config.rocksdb_enable_pipelined_write = ParseBool(iterator->second);
     }
     if (const auto iterator = values.find("search.backend"); iterator != values.end()) {
         config.search_backend = iterator->second;
@@ -516,6 +552,9 @@ StatusOr<ServerConfig> ConfigLoader::LoadFromFile(const std::string& path) {
         if (const auto it = values.find("gateway.rate_limit_per_second"); it != values.end()) {
             config.rate_limit_per_second = std::stoul(it->second);
         }
+        if (const auto it = values.find("gateway.kv_batch_max_records"); it != values.end()) {
+            config.kv_batch_max_records = std::max<std::size_t>(1, std::stoul(it->second));
+        }
         if (const auto it = values.find("gateway.require_api_key"); it != values.end()) {
             config.require_api_key = ParseBool(it->second);
         }
@@ -560,6 +599,27 @@ StatusOr<ServerConfig> ConfigLoader::LoadFromFile(const std::string& path) {
         }
         if (const auto it = values.find("storage.db_path"); it != values.end()) {
             config.db_path = it->second;
+        }
+        if (const auto it = values.find("storage.rocksdb_max_background_jobs"); it != values.end()) {
+            config.rocksdb_max_background_jobs = std::max<std::size_t>(1, std::stoul(it->second));
+        }
+        if (const auto it = values.find("storage.rocksdb_write_buffer_size_mb"); it != values.end()) {
+            config.rocksdb_write_buffer_size_mb = std::max<std::size_t>(1, std::stoul(it->second));
+        }
+        if (const auto it = values.find("storage.rocksdb_max_write_buffer_number"); it != values.end()) {
+            config.rocksdb_max_write_buffer_number = std::max<std::size_t>(2, std::stoul(it->second));
+        }
+        if (const auto it = values.find("storage.rocksdb_target_file_size_mb"); it != values.end()) {
+            config.rocksdb_target_file_size_mb = std::max<std::size_t>(1, std::stoul(it->second));
+        }
+        if (const auto it = values.find("storage.rocksdb_bytes_per_sync"); it != values.end()) {
+            config.rocksdb_bytes_per_sync = static_cast<std::uint64_t>(std::stoull(it->second));
+        }
+        if (const auto it = values.find("storage.rocksdb_wal_bytes_per_sync"); it != values.end()) {
+            config.rocksdb_wal_bytes_per_sync = static_cast<std::uint64_t>(std::stoull(it->second));
+        }
+        if (const auto it = values.find("storage.rocksdb_enable_pipelined_write"); it != values.end()) {
+            config.rocksdb_enable_pipelined_write = ParseBool(it->second);
         }
         if (const auto it = values.find("search.backend"); it != values.end()) {
             config.search_backend = it->second;

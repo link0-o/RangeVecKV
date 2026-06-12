@@ -9,6 +9,7 @@ data/
 models/
 images/
 logs/
+perf_results/
 
 *.tar.gz
 

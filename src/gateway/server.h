@@ -31,6 +31,7 @@ public:
     kvai::infra::Status UpsertDocument(kvai::core::DocumentRecord record, std::string trace_id);
     kvai::infra::Status DeleteDocument(std::string collection, std::string key, std::string trace_id);
     kvai::infra::Status PutKvRecord(kvai::core::DocumentRecord record, std::string trace_id);
+    kvai::infra::Status PutKvRecords(std::vector<kvai::core::DocumentRecord> records, std::string trace_id);
     kvai::infra::StatusOr<kvai::core::DocumentRecord> GetKvRecord(std::string collection, std::string key, std::string trace_id) const;
     kvai::infra::StatusOr<std::vector<kvai::core::DocumentRecord>> RangeKvRecords(std::string collection,
                                                                                    std::string begin_key,

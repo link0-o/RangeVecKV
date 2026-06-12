@@ -13,6 +13,7 @@
 #include <map>
 #include <sstream>
 #include <string>
+#include <utility>
 
 #include <nlohmann/json.hpp>
 
@@ -424,6 +425,35 @@ void HttpGatewayRuntime::HandleClient(int client_fd) {
                 nlohmann::json ok_json;
                 ok_json["message"] = "migration record applied";
                 response = json::BuildHttpResponse(200, "OK", "application/json", ok_json.dump());
+            }
+        }
+    } else if (path == "/v1/kv/batch") {
+        if (method != "POST") {
+            nlohmann::json error_json;
+            error_json["message"] = "unsupported method for /v1/kv/batch";
+            response = json::BuildHttpResponse(405, "Method Not Allowed", "application/json", error_json.dump());
+        } else {
+            auto body_json = nlohmann::json::parse(body, nullptr, false);
+            if (body_json.is_discarded()) {
+                response = ErrorResponse(kvai::infra::Status::InvalidArgument("malformed kv batch json"));
+            } else {
+                auto parsed = json::ParseKvBatchUpsert(body_json);
+                if (!parsed.ok()) {
+                    response = ErrorResponse(parsed.status());
+                } else {
+                    auto records = parsed.ConsumeValue();
+                    const auto record_count = records.size();
+                    auto status = server_.PutKvRecords(std::move(records),
+                                                        headers.count("x-trace-id") == 0 ? std::string() : headers.at("x-trace-id"));
+                    if (!status.ok()) {
+                        response = ErrorResponse(status);
+                    } else {
+                        nlohmann::json ok_json;
+                        ok_json["message"] = "kv batch stored";
+                        ok_json["record_count"] = record_count;
+                        response = json::BuildHttpResponse(200, "OK", "application/json", ok_json.dump());
+                    }
+                }
             }
         }
     } else if (path == "/v1/kv") {

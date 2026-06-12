@@ -68,11 +68,46 @@ int main() {
         return 1;
     }
 
+    kvai::core::DocumentRecord batch_ok_a{"documents", "batch-1", "Batch 1", "Batch body 1", {}};
+    batch_ok_a.version = 20;
+    batch_ok_a.updated_at_unix_ms = 20;
+    batch_ok_a.mutation_id = "batch-20-a";
+    kvai::core::DocumentRecord batch_ok_b{"documents", "batch-2", "Batch 2", "Batch body 2", {}};
+    batch_ok_b.version = 21;
+    batch_ok_b.updated_at_unix_ms = 21;
+    batch_ok_b.mutation_id = "batch-21-b";
+    if (!Expect(recovered.BatchPut({batch_ok_a, batch_ok_b}).ok(), "batch put failed")) {
+        return 1;
+    }
+    if (!Expect(recovered.Get("documents", "batch-1").ok() && recovered.Get("documents", "batch-2").ok(),
+                "batch put records missing")) {
+        return 1;
+    }
+    kvai::core::DocumentRecord duplicate_key = batch_ok_a;
+    duplicate_key.mutation_id = "batch-duplicate-key";
+    if (!Expect(!recovered.BatchPut({batch_ok_a, duplicate_key}).ok(), "batch duplicate key should be rejected")) {
+        return 1;
+    }
+    kvai::core::DocumentRecord batch_partial{"documents", "batch-partial", "Partial", "should not write", {}};
+    batch_partial.version = 30;
+    batch_partial.updated_at_unix_ms = 30;
+    batch_partial.mutation_id = "batch-partial-30";
+    kvai::core::DocumentRecord batch_stale = record;
+    batch_stale.body = "stale in batch";
+    batch_stale.version = 9;
+    batch_stale.mutation_id = "batch-stale-9";
+    if (!Expect(!recovered.BatchPut({batch_partial, batch_stale}).ok(), "batch with stale mutation should fail")) {
+        return 1;
+    }
+    if (!Expect(!recovered.Get("documents", "batch-partial").ok(), "failed batch should not partially write records")) {
+        return 1;
+    }
+
     auto range = recovered.Range("documents", "", "", 10);
     if (!Expect(range.ok(), "range failed")) {
         return 1;
     }
-    if (!Expect(range.value().size() == 1, "range size mismatch")) {
+    if (!Expect(range.value().size() == 3, "range size mismatch")) {
         return 1;
     }
     auto collections = recovered.Collections();

@@ -198,7 +198,7 @@ jobs:
           path: rangeveckv-*.tar.gz
 
   docker-production:
-    name: Production Docker build
+    name: Production Docker build and smoke
     runs-on: ubuntu-24.04
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.production_docker == 'true'
 
@@ -216,7 +216,24 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Prepare Docker build context
-        run: mkdir -p docker/empty-vcpkg-cache
+        run: |
+          mkdir -p data logs models images docker/empty-vcpkg-cache
+          printf '%s\n' \
+            'KVAI_API_KEY=ci-production-secret' \
+            'KVAI_DISCOVERY_BACKEND=etcd' \
+            'KVAI_ETCD_ENDPOINTS=http://etcd:2379' \
+            'KVAI_ADVERTISE_HOST=rangeveckv' \
+            'KVAI_NODE_WEIGHT=100' \
+            'KVAI_NODE_ZONE=ci' \
+            'KVAI_DATA_MIGRATION_ENABLED=false' \
+            'KVAI_MIGRATION_DELETE_DELAY_MS=300000' \
+            'KVAI_CLUSTER_SLOT_COUNT=4096' \
+            'KVAI_CLUSTER_NODES=node-local@127.0.0.1:8080' \
+            'KVAI_TLS_MODE=disabled' \
+            'KVAI_AI_BACKEND=deterministic' \
+            'KVAI_MODEL_PATH=/opt/rangeveckv/models/chinese-clip-vit-base-patch16/model_quantized.onnx' \
+            'KVAI_TOKENIZER_PATH=/opt/rangeveckv/models/chinese-clip-vit-base-patch16/vocab.txt' \
+            > .env
 
       - name: Build production image
         uses: docker/build-push-action@v6
@@ -226,6 +243,56 @@ jobs:
           tags: rangeveckv:ci
           build-contexts: |
             vcpkg_binary_cache=./docker/empty-vcpkg-cache
+
+      - name: Tag image for Compose
+        run: docker tag rangeveckv:ci rangeveckv:local
+
+      - name: Start production stack
+        env:
+          KVAI_DOCKER_OPTIONAL_BACKENDS: "ON"
+        run: docker compose up -d etcd rangeveckv
+
+      - name: Wait for production health
+        run: |
+          for attempt in $(seq 1 90); do
+            status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' rangeveckv 2>/dev/null || true)"
+            if [ "$status" = "healthy" ]; then
+              exit 0
+            fi
+            if [ "$status" = "unhealthy" ] || [ "$status" = "exited" ] || [ "$status" = "dead" ]; then
+              docker compose logs --tail=200 rangeveckv
+              exit 1
+            fi
+            sleep 2
+          done
+          docker compose logs --tail=200 rangeveckv
+          exit 1
+
+      - name: HTTP smoke on production image
+        env:
+          KVAI_API_KEY: ci-production-secret
+        run: ./scripts/http_smoke.sh http://127.0.0.1:8080
+
+      - name: Protobuf BRPC write smoke
+        run: |
+          docker compose exec -T rangeveckv \
+            /opt/rangeveckv/bin/kvai_brpc_kv_benchmark \
+            --server 127.0.0.1:8080 \
+            --api-key ci-production-secret \
+            --mode kv \
+            --threads 2 \
+            --duration-seconds 2 \
+            --warmup-seconds 0 \
+            --output /tmp/brpc_kv_smoke.json
+          docker compose exec -T rangeveckv cat /tmp/brpc_kv_smoke.json
+
+      - name: Production compose logs on failure
+        if: failure()
+        run: docker compose logs --tail=300
+
+      - name: Stop production stack
+        if: always()
+        run: docker compose down -v
 
   release:
     name: GitHub release

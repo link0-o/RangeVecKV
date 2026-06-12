@@ -16,6 +16,7 @@ struct ServerConfig {
     std::size_t max_top_k = 50;
     std::size_t embedding_dimensions = 32;
     std::size_t rate_limit_per_second = 200;
+    std::size_t kv_batch_max_records = 1000;
     std::uint32_t ai_timeout_ms = 25;
     std::string default_collection = "documents";
     std::string ai_backend = "auto";
@@ -35,6 +36,13 @@ struct ServerConfig {
     std::size_t cluster_slot_count = 4096;
     bool read_only_mode = false;
     bool enable_demo_data = true;
+    std::size_t rocksdb_max_background_jobs = 8;
+    std::size_t rocksdb_write_buffer_size_mb = 128;
+    std::size_t rocksdb_max_write_buffer_number = 6;
+    std::size_t rocksdb_target_file_size_mb = 128;
+    std::uint64_t rocksdb_bytes_per_sync = 1048576;
+    std::uint64_t rocksdb_wal_bytes_per_sync = 1048576;
+    bool rocksdb_enable_pipelined_write = true;
     bool require_api_key = false;
     std::string api_key;
     std::string tls_mode = "disabled";

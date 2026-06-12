@@ -25,6 +25,7 @@ nlohmann::json ToJson(const std::vector<kvai::core::DocumentRecord>& records);
 
 kvai::infra::StatusOr<SemanticSearchQuery> ParseSearchQuery(const nlohmann::json& j, bool is_post);
 kvai::infra::StatusOr<kvai::core::DocumentRecord> ParseDocumentUpsert(const nlohmann::json& j);
+kvai::infra::StatusOr<std::vector<kvai::core::DocumentRecord>> ParseKvBatchUpsert(const nlohmann::json& j);
 
 // --- HTTP Response Helpers ---
 

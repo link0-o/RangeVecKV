@@ -34,6 +34,7 @@ endif()
 if(KVAI_BRPC_TARGET)
     set(KVAI_GATEWAY_BRPC_SOURCES
         brpc_http_service.cpp
+        brpc_kv_write_service.cpp
         brpc_runtime.cpp)
     # Remove the stub when real BRPC service is available
     list(REMOVE_ITEM KVAI_GATEWAY_SOURCES brpc_service_stub.cpp)
@@ -58,3 +59,9 @@ add_executable(kvai_server main.cpp)
 target_link_libraries(kvai_server PRIVATE kvai_gateway kvai_infra kvai_core kvai_ai kvai_search kvai_proto)
 
 install(TARGETS kvai_server RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+
+if(KVAI_BRPC_TARGET)
+    add_executable(kvai_brpc_kv_benchmark brpc_kv_benchmark.cpp)
+    target_link_libraries(kvai_brpc_kv_benchmark PRIVATE kvai_gateway kvai_proto ${KVAI_BRPC_TARGET})
+    install(TARGETS kvai_brpc_kv_benchmark RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+endif()

@@ -35,8 +35,8 @@ StatusOr<ClusterNode> ParseEtcdNodeValue(const std::string& node_id, const std::
 
 /// etcd-based service discovery for dynamic cluster membership.
 /// When started, registers the local node with a lease-backed key,
-/// watches the prefix for changes, and rebuilds the consistent hash ring
-/// when nodes join or leave.
+/// watches the prefix for changes, and rebuilds the slot owner ring when
+/// nodes join or leave.
 class EtcdServiceDiscovery {
 public:
     EtcdServiceDiscovery(std::string endpoints, std::string prefix,

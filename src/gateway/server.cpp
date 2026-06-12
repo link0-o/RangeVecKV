@@ -3,6 +3,8 @@
 #include <atomic>
 #include <chrono>
 #include <fstream>
+#include <set>
+#include <utility>
 
 #include "infra/logging.h"
 
@@ -303,6 +305,45 @@ kvai::infra::Status InProcessGatewayServer::PutKvRecord(kvai::core::DocumentReco
 
     PrepareMutation(record, config_.node_id);
     return kv_store_->Put(record);
+}
+
+kvai::infra::Status InProcessGatewayServer::PutKvRecords(std::vector<kvai::core::DocumentRecord> records,
+                                                          std::string trace_id) {
+    if (!started_) {
+        return kvai::infra::Status::Unavailable("server not started");
+    }
+    if (config_.read_only_mode) {
+        return kvai::infra::Status::Unavailable("storage is in read-only mode");
+    }
+    if (records.empty()) {
+        return kvai::infra::Status::InvalidArgument("kv batch cannot be empty");
+    }
+    if (records.size() > config_.kv_batch_max_records) {
+        return kvai::infra::Status::InvalidArgument("kv batch exceeds gateway.kv_batch_max_records");
+    }
+
+    const auto trace = TraceInjector::EnsureTraceId(trace_id);
+    std::set<std::string> batch_keys;
+    for (auto& record : records) {
+        record.collection = record.collection.empty() ? config_.default_collection : record.collection;
+        if (record.key.empty()) {
+            return kvai::infra::Status::InvalidArgument("kv key cannot be empty");
+        }
+        const auto composite_key = record.collection + '\n' + record.key;
+        if (!batch_keys.insert(composite_key).second) {
+            return kvai::infra::Status::InvalidArgument("kv batch contains duplicate key: " + record.collection + ":" + record.key);
+        }
+
+        const auto route = DescribeRoute(record.collection, record.key);
+        if (route.has_primary && !route.local_owner) {
+            return kvai::infra::Status::Unavailable(RemoteOwnerMessage("kv record", route, trace));
+        }
+    }
+
+    for (auto& record : records) {
+        PrepareMutation(record, config_.node_id);
+    }
+    return kv_store_->BatchPut(records);
 }
 
 kvai::infra::StatusOr<kvai::core::DocumentRecord> InProcessGatewayServer::GetKvRecord(std::string collection,

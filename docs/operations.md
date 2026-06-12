@@ -14,6 +14,23 @@
 - `KVAI_MODEL_PATH`: ONNX embedding model path
 - `KVAI_TOKENIZER_PATH`: WordPiece vocabulary path used by the ONNX adapter
 
+## CI/CD Profiles
+
+The default GitHub Actions path keeps the build lightweight:
+
+- local fallback build and `ctest`
+- fallback Docker Compose smoke through `./scripts/http_smoke.sh`
+- fallback package artifacts on tags or manual runs
+
+The manual `production_docker=true` workflow path builds the full optional
+backend image through Docker/vcpkg, starts etcd plus RangeVecKV, then verifies:
+
+- HTTP compatibility through `./scripts/http_smoke.sh`
+- typed Protobuf BRPC writes through `kvai_brpc_kv_benchmark`
+
+This keeps every pull request fast while preserving a heavier production smoke
+for release checks or dependency changes.
+
 ## Local Service Lifecycle
 
 Build and test:
@@ -115,9 +132,84 @@ curl -X DELETE "http://127.0.0.1:8080/v1/kv?collection=kv&key=user:1" \
   -H "x-api-key: ${KVAI_API_KEY}"
 ```
 
+For high-throughput pure KV ingestion, use `POST /v1/kv/batch`. The endpoint
+keeps the same version and `mutation_id` checks as single-record writes,
+rejects duplicate keys in one request, and is capped by
+`gateway.kv_batch_max_records`:
+
+```bash
+curl -X POST http://127.0.0.1:8080/v1/kv/batch \
+  -H "x-api-key: ${KVAI_API_KEY}" \
+  -H "Content-Type: application/json" \
+  -d '{"records":[{"collection":"kv","key":"user:2","value":"batch value 1"},{"collection":"kv","key":"user:3","value":"batch value 2"}]}'
+```
+
 The semantic document API `/v1/documents` still writes both KV storage and the
 vector index. Do not use `/v1/kv` for semantic documents that should appear in
 `/v1/search`.
+
+## Production Protobuf BRPC Writes
+
+Production write clients should prefer the typed Protobuf BRPC service in
+`proto/search.proto`:
+
+- `KvWriteService.PutKv`
+- `KvWriteService.BatchPutKv`
+- `KvWriteService.UpsertDocument`
+
+The RPC path carries auth and trace metadata through `RequestContext`, then
+reuses the same gateway methods as JSON REST. It preserves API key/Bearer auth,
+fixed slot owner checks, version/CAS validation, `mutation_id` idempotency,
+RocksDB WAL writes and the vector outbox behavior. Its purpose is to remove
+HTTP REST dispatch, JSON body parsing, JSON response serialization and request
+attachment copies from the hot write path.
+
+Example production benchmark command:
+
+```bash
+./build/production/src/gateway/kvai_brpc_kv_benchmark \
+  --server 127.0.0.1:8080 \
+  --api-key "${KVAI_API_KEY}" \
+  --mode kv \
+  --threads 16 \
+  --duration-seconds 20 \
+  --output perf_results/brpc_kv.json
+```
+
+Batch KV benchmark:
+
+```bash
+./build/production/src/gateway/kvai_brpc_kv_benchmark \
+  --server 127.0.0.1:8080 \
+  --api-key "${KVAI_API_KEY}" \
+  --mode kv_batch \
+  --batch-size 100 \
+  --threads 16 \
+  --duration-seconds 20 \
+  --output perf_results/brpc_kv_batch.json
+```
+
+Keep exact QPS and latency numbers with the local benchmark artifacts rather
+than in long-lived docs. Always record power mode, Docker/native mode, optional
+backend set, data directory freshness, concurrency and batch size beside the
+result.
+
+## RocksDB Write Tuning
+
+Production config exposes safe RocksDB knobs:
+
+- `storage.rocksdb_max_background_jobs`
+- `storage.rocksdb_write_buffer_size_mb`
+- `storage.rocksdb_max_write_buffer_number`
+- `storage.rocksdb_target_file_size_mb`
+- `storage.rocksdb_bytes_per_sync`
+- `storage.rocksdb_wal_bytes_per_sync`
+- `storage.rocksdb_enable_pipelined_write`
+
+The default posture keeps `WriteOptions.disableWAL=false` and does not use blind
+puts or `KeyMayExist` shortcuts. Single-record writes still read the current
+record before writing so stale versions cannot overwrite newer data and repeated
+`mutation_id` values remain idempotent.
 
 The project-level vcpkg overlay builds `onnx` with
 `ONNX_DISABLE_STATIC_REGISTRATION=ON`, as required by the vcpkg
@@ -152,8 +244,9 @@ is still disabled, so those writes return `Unavailable` with the owner endpoint.
 
 Semantic document writes use a persistent vector index outbox. KV is updated
 first, then the pending index task is written to
-`search.vector_index_outbox_path`; a background worker computes embeddings and
-updates the vector index. Failed tasks remain pending for retry. Record
+`search.vector_index_outbox_path`; the request path triggers one outbox drain
+and a background worker continues computing embeddings and updating the vector
+index. Failed tasks remain pending for retry. Record
 `version`, `updated_at_unix_ms`, and `mutation_id` fields provide stale-write
 rejection and idempotent retries.
 

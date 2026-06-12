@@ -31,6 +31,7 @@ int main() {
             std::ofstream output(config_path);
             output << "gateway.require_api_key: true\n";
             output << "gateway.api_key: ${KVAI_TEST_API_KEY}\n";
+            output << "gateway.kv_batch_max_records: 32\n";
             output << "ai.tokenizer_path: /models/vocab.txt\n";
             output << "ai.max_tokens: 128\n";
             output << "cluster.nodes: ${KVAI_TEST_CLUSTER}\n";
@@ -48,6 +49,13 @@ int main() {
             output << "cluster.slot_count: 128\n";
             output << "search.vector_index_outbox_path: /tmp/vector_outbox.wal\n";
             output << "cluster.etcd_endpoints: http://etcd:2379\n";
+            output << "storage.rocksdb_max_background_jobs: 11\n";
+            output << "storage.rocksdb_write_buffer_size_mb: 96\n";
+            output << "storage.rocksdb_max_write_buffer_number: 5\n";
+            output << "storage.rocksdb_target_file_size_mb: 192\n";
+            output << "storage.rocksdb_bytes_per_sync: 2048\n";
+            output << "storage.rocksdb_wal_bytes_per_sync: 4096\n";
+            output << "storage.rocksdb_enable_pipelined_write: false\n";
         }
 
         ::setenv("KVAI_TEST_API_KEY", "integration-secret", 1);
@@ -59,6 +67,7 @@ int main() {
         } else {
             if (!Expect(config.value().require_api_key, "flat: api key flag not parsed")) ++failures;
             if (!Expect(config.value().api_key == "integration-secret", "flat: api key env expansion failed")) ++failures;
+            if (!Expect(config.value().kv_batch_max_records == 32, "flat: kv batch max not parsed")) ++failures;
             if (!Expect(config.value().tokenizer_path == "/models/vocab.txt", "flat: tokenizer_path not parsed")) ++failures;
             if (!Expect(config.value().ai_max_tokens == 128, "flat: max_tokens not parsed")) ++failures;
             if (!Expect(config.value().cluster_nodes == "node-a@127.0.0.1:8080", "flat: cluster env expansion failed")) ++failures;
@@ -76,6 +85,13 @@ int main() {
             if (!Expect(config.value().cluster_slot_count == 128, "flat: slot_count not parsed")) ++failures;
             if (!Expect(config.value().vector_index_outbox_path == "/tmp/vector_outbox.wal", "flat: vector_index_outbox_path not parsed")) ++failures;
             if (!Expect(config.value().etcd_endpoints == "http://etcd:2379", "flat: etcd_endpoints not parsed")) ++failures;
+            if (!Expect(config.value().rocksdb_max_background_jobs == 11, "flat: rocksdb background jobs not parsed")) ++failures;
+            if (!Expect(config.value().rocksdb_write_buffer_size_mb == 96, "flat: rocksdb write buffer not parsed")) ++failures;
+            if (!Expect(config.value().rocksdb_max_write_buffer_number == 5, "flat: rocksdb write buffer number not parsed")) ++failures;
+            if (!Expect(config.value().rocksdb_target_file_size_mb == 192, "flat: rocksdb target file size not parsed")) ++failures;
+            if (!Expect(config.value().rocksdb_bytes_per_sync == 2048, "flat: rocksdb bytes_per_sync not parsed")) ++failures;
+            if (!Expect(config.value().rocksdb_wal_bytes_per_sync == 4096, "flat: rocksdb wal_bytes_per_sync not parsed")) ++failures;
+            if (!Expect(!config.value().rocksdb_enable_pipelined_write, "flat: rocksdb pipelined write not parsed")) ++failures;
         }
     }
 
@@ -93,6 +109,7 @@ int main() {
             output << "  require_api_key: true\n";
             output << "  api_key: ${KVAI_TEST_API_KEY}\n";
             output << "  rate_limit_per_second: 500\n";
+            output << "  kv_batch_max_records: 64\n";
             output << "ai:\n";
             output << "  backend: deterministic\n";
             output << "  timeout_ms: 50\n";
@@ -107,6 +124,13 @@ int main() {
             output << "  backend: wal\n";
             output << "  enable_demo_data: false\n";
             output << "  read_only_mode: true\n";
+            output << "  rocksdb_max_background_jobs: 12\n";
+            output << "  rocksdb_write_buffer_size_mb: 160\n";
+            output << "  rocksdb_max_write_buffer_number: 7\n";
+            output << "  rocksdb_target_file_size_mb: 224\n";
+            output << "  rocksdb_bytes_per_sync: 8192\n";
+            output << "  rocksdb_wal_bytes_per_sync: 16384\n";
+            output << "  rocksdb_enable_pipelined_write: false\n";
             output << "cluster:\n";
             output << "  node_id: test-node\n";
             output << "  advertise_host: test-node\n";
@@ -143,6 +167,7 @@ int main() {
             if (!Expect(config.value().require_api_key, "nested: api key flag not parsed")) ++failures;
             if (!Expect(config.value().api_key == "nested-secret", "nested: api key env expansion failed")) ++failures;
             if (!Expect(config.value().rate_limit_per_second == 500, "nested: rate limit not parsed")) ++failures;
+            if (!Expect(config.value().kv_batch_max_records == 64, "nested: kv batch max not parsed")) ++failures;
             if (!Expect(config.value().ai_timeout_ms == 50, "nested: ai timeout not parsed")) ++failures;
             if (!Expect(config.value().tokenizer_path == "/models/vocab.txt", "nested: tokenizer path not parsed")) ++failures;
             if (!Expect(config.value().ai_max_tokens == 128, "nested: max tokens not parsed")) ++failures;
@@ -165,6 +190,13 @@ int main() {
             if (!Expect(config.value().log_level == "debug", "nested: log level not parsed")) ++failures;
             if (!Expect(config.value().log_file_path == "/tmp/kvai.log", "nested: log file path not parsed")) ++failures;
             if (!Expect(config.value().read_only_mode, "nested: read_only_mode not parsed")) ++failures;
+            if (!Expect(config.value().rocksdb_max_background_jobs == 12, "nested: rocksdb background jobs not parsed")) ++failures;
+            if (!Expect(config.value().rocksdb_write_buffer_size_mb == 160, "nested: rocksdb write buffer not parsed")) ++failures;
+            if (!Expect(config.value().rocksdb_max_write_buffer_number == 7, "nested: rocksdb write buffer number not parsed")) ++failures;
+            if (!Expect(config.value().rocksdb_target_file_size_mb == 224, "nested: rocksdb target file size not parsed")) ++failures;
+            if (!Expect(config.value().rocksdb_bytes_per_sync == 8192, "nested: rocksdb bytes_per_sync not parsed")) ++failures;
+            if (!Expect(config.value().rocksdb_wal_bytes_per_sync == 16384, "nested: rocksdb wal_bytes_per_sync not parsed")) ++failures;
+            if (!Expect(!config.value().rocksdb_enable_pipelined_write, "nested: rocksdb pipelined write not parsed")) ++failures;
         }
     }
 
